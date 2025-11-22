@@ -34,7 +34,12 @@ public class PedidoConferenciaService {
         ) X
         JOIN TGFITE ITE
             ON ITE.NUNOTA = X.NUNOTA
-        WHERE X.STATUS_CONFERENCIA IN ('AC', 'R', 'C')
+            WHERE X.STATUS_CONFERENCIA IN (
+                'A', 'AC', 'AL', 'C',
+                'D', 'F',
+                'R', 'RA', 'RD', 'RF',
+                'Z'
+            )
         """;
 
     public List<PedidoConferenciaDto> listarPendentes() {
