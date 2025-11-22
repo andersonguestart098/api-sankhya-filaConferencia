@@ -7,7 +7,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 @Slf4j
@@ -17,7 +20,7 @@ public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
 
-    // Template com PLACEHOLDERS para início/fim da página
+    // Template com PLACEHOLDERS para filtros + paginação
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
         SELECT *
         FROM (
@@ -29,14 +32,14 @@ public class PedidoConferenciaService {
                 ITE.QTDNEG,
                 ITE.VLRUNIT,
                 ITE.VLRTOT,
-                ROW_NUMBER() OVER (ORDER BY X.NUNOTA, ITE.SEQUENCIA) AS RN
+                ROW_NUMBER() OVER (ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA) AS RN
             FROM (
                 SELECT
                     CAB.NUNOTA,
                     SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
                 FROM TGFCAB CAB
-                WHERE CAB.DTNEG >= TRUNC(SYSDATE, 'MM')              -- 1º dia do mês atual
-                  AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1) -- 1º dia do próximo mês
+                WHERE 1 = 1
+                  %s  -- Filtro de data
             ) X
             JOIN TGFITE ITE
                 ON ITE.NUNOTA = X.NUNOTA
@@ -46,23 +49,64 @@ public class PedidoConferenciaService {
                 'R', 'RA', 'RD', 'RF',
                 'Z'
             )
+              %s  -- Filtro de status
         )
         WHERE RN BETWEEN %d AND %d
         ORDER BY RN
         """;
 
-    // método antigo, se quiser manter um default
+    // opcional: método default sem filtros (se usar em outro lugar)
     public List<PedidoConferenciaDto> listarPendentes() {
-        return listarPendentesPaginado(0, 50); // página 0, 50 itens por página
+        return listarPendentesPaginado(0, 50, null, null, null);
     }
 
-    // 🔹 Novo: paginação
-    public List<PedidoConferenciaDto> listarPendentesPaginado(int page, int pageSize) {
+    // paginação + filtros
+    public List<PedidoConferenciaDto> listarPendentesPaginado(
+            int page,
+            int pageSize,
+            String status,
+            LocalDate dataIni,
+            LocalDate dataFim
+    ) {
 
         int inicio = page * pageSize + 1;          // RN começa em 1
         int fim    = inicio + pageSize - 1;
 
-        String sql = String.format(SQL_PEDIDOS_PAGINADO_TEMPLATE, inicio, fim);
+        // ---------- Filtro de data ----------
+        String filtroDataSql;
+        if (dataIni != null && dataFim != null) {
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+            String iniStr = dataIni.format(fmt);
+            String fimStr = dataFim.format(fmt);
+
+            filtroDataSql = String.format("""
+                AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
+                AND CAB.DTNEG <  TO_DATE('%s', 'DD/MM/YYYY') + 1
+                """, iniStr, fimStr);
+        } else {
+            // default: mês atual
+            filtroDataSql = """
+                AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
+                AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+                """;
+        }
+
+        // ---------- Filtro de status ----------
+        String filtroStatusSql = "";
+        if (status != null && !status.isBlank()) {
+            // aqui dá pra validar se status é um dos válidos (A, AC, AL, ...)
+            filtroStatusSql = " AND X.STATUS_CONFERENCIA = '" + status.trim() + "'";
+        }
+
+        // monta SQL final (4 argumentos: %s, %s, %d, %d)
+        String sql = String.format(
+                SQL_PEDIDOS_PAGINADO_TEMPLATE,
+                filtroDataSql,
+                filtroStatusSql,
+                inicio,
+                fim
+        );
 
         JsonNode root = gatewayClient.executeDbExplorer(sql);
 
@@ -92,33 +136,42 @@ public class PedidoConferenciaService {
             throw new IllegalStateException("Campos NUNOTA/STATUS_CONFERENCIA não encontrados na resposta do DbExplorer.");
         }
 
-        List<PedidoConferenciaDto> result = new ArrayList<>();
+        // 🔥 AGRUPAR POR NUNOTA
+        LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
 
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
             Long nunota       = readLong(r, iNunota);
-            String status     = readText(r, iStatus);
+            String st         = readText(r, iStatus);
             Integer sequencia = readInt(r, iSeq);
             Long codProd      = readLong(r, iCodProd);
             Double qtdNeg     = readDouble(r, iQtdNeg);
             Double vlrUnit    = readDouble(r, iVlrUnit);
             Double vlrTot     = readDouble(r, iVlrTot);
 
-            if (nunota != null && status != null) {
-                result.add(new PedidoConferenciaDto(
-                        nunota,
-                        status,
-                        sequencia,
-                        codProd,
-                        qtdNeg,
-                        vlrUnit,
-                        vlrTot
-                ));
+            if (nunota == null || st == null) {
+                continue;
             }
+
+            // pega (ou cria) o pedido
+            PedidoConferenciaDto pedido = pedidosMap.get(nunota);
+            if (pedido == null) {
+                pedido = new PedidoConferenciaDto(nunota, st);
+                pedidosMap.put(nunota, pedido);
+            }
+
+            // adiciona o item
+            pedido.addItem(new ItemConferenciaDto(
+                    sequencia,
+                    codProd,
+                    qtdNeg,
+                    vlrUnit,
+                    vlrTot
+            ));
         }
 
-        return result;
+        return new ArrayList<>(pedidosMap.values());
     }
 
     // ---------- helpers ----------

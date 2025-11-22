@@ -9,9 +9,11 @@ import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaService;
 import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @RestController
@@ -22,13 +24,24 @@ public class ConferenciaController {
     private final PedidoConferenciaService pedidoConferenciaService;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
 
-    // 1) Lista pedidos pendentes (paginado)
+    // 1) Lista pedidos pendentes (paginado + filtros)
     @GetMapping("/pedidos-pendentes")
     public List<PedidoConferenciaDto> listarPendentes(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int pageSize
+            @RequestParam(defaultValue = "50") int pageSize,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataIni,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataFim
     ) {
-        return pedidoConferenciaService.listarPendentesPaginado(page, pageSize);
+        return pedidoConferenciaService.listarPendentesPaginado(
+                page,
+                pageSize,
+                status,
+                dataIni,
+                dataFim
+        );
     }
 
     // 2) Inicia conferência para um pedido escolhido
@@ -53,7 +66,6 @@ public class ConferenciaController {
 
         Long nuconf = nuconfNode.asLong();
 
-        // Dispara CrudListener para vincular NUCONF ao cabeçalho da nota
         conferenciaWorkflowService.atualizarNuconfCabecalhoNota(
                 req.nunotaOrig(),
                 nuconf
@@ -75,7 +87,6 @@ public class ConferenciaController {
                 req.nuconf()
         );
 
-        // se quiser pode só devolver o JSON bruto do Sankhya:
         return ResponseEntity.ok(resp);
     }
 
