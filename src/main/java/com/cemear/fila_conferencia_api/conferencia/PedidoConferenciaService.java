@@ -17,49 +17,66 @@ public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
 
-    private static final String SQL_PEDIDOS = """
-        SELECT
-            X.NUNOTA,
-            X.STATUS_CONFERENCIA,
-            ITE.SEQUENCIA,
-            ITE.CODPROD,
-            ITE.QTDNEG,
-            ITE.VLRUNIT,
-            ITE.VLRTOT
+    // Template com PLACEHOLDERS para início/fim da página
+    private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
+        SELECT *
         FROM (
             SELECT
-                CAB.NUNOTA,
-                SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
-            FROM TGFCAB CAB
-        ) X
-        JOIN TGFITE ITE
-            ON ITE.NUNOTA = X.NUNOTA
+                X.NUNOTA,
+                X.STATUS_CONFERENCIA,
+                ITE.SEQUENCIA,
+                ITE.CODPROD,
+                ITE.QTDNEG,
+                ITE.VLRUNIT,
+                ITE.VLRTOT,
+                ROW_NUMBER() OVER (ORDER BY X.NUNOTA, ITE.SEQUENCIA) AS RN
+            FROM (
+                SELECT
+                    CAB.NUNOTA,
+                    SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
+                FROM TGFCAB CAB
+                WHERE CAB.DTNEG >= TRUNC(SYSDATE, 'MM')              -- 1º dia do mês atual
+                  AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1) -- 1º dia do próximo mês
+            ) X
+            JOIN TGFITE ITE
+                ON ITE.NUNOTA = X.NUNOTA
             WHERE X.STATUS_CONFERENCIA IN (
                 'A', 'AC', 'AL', 'C',
                 'D', 'F',
                 'R', 'RA', 'RD', 'RF',
                 'Z'
             )
+        )
+        WHERE RN BETWEEN %d AND %d
+        ORDER BY RN
         """;
 
+    // método antigo, se quiser manter um default
     public List<PedidoConferenciaDto> listarPendentes() {
-        // 1) Chama o DbExplorer
-        JsonNode root = gatewayClient.executeDbExplorer(SQL_PEDIDOS);
+        return listarPendentesPaginado(0, 50); // página 0, 50 itens por página
+    }
 
-        // 2) Navega até o responseBody
-        JsonNode responseBody = root.path("responseBody");
+    // 🔹 Novo: paginação
+    public List<PedidoConferenciaDto> listarPendentesPaginado(int page, int pageSize) {
+
+        int inicio = page * pageSize + 1;          // RN começa em 1
+        int fim    = inicio + pageSize - 1;
+
+        String sql = String.format(SQL_PEDIDOS_PAGINADO_TEMPLATE, inicio, fim);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+
+        JsonNode responseBody   = root.path("responseBody");
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
-        JsonNode rowsNode = responseBody.path("rows");
+        JsonNode rowsNode       = responseBody.path("rows");
 
         if (!rowsNode.isArray()) {
-            // Log pra debug – se cair aqui, cola esse JSON pra eu ver
             log.error("Resposta inesperada do DbExplorer: {}", root.toPrettyString());
             throw new IllegalStateException("DbExplorer não retornou array 'rows' na resposta.");
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
 
-        // 3) Descobre os índices das colunas pelo fieldsMetadata
         List<String> cols = extractColumns(fieldsMetadata);
 
         int iNunota   = indexOf(cols, "NUNOTA");
@@ -70,7 +87,6 @@ public class PedidoConferenciaService {
         int iVlrUnit  = indexOf(cols, "VLRUNIT");
         int iVlrTot   = indexOf(cols, "VLRTOT");
 
-        // Se alguma coluna essencial não for encontrada, já avisa
         if (iNunota < 0 || iStatus < 0) {
             log.error("Campos obrigatórios não encontrados em fieldsMetadata: {}", cols);
             throw new IllegalStateException("Campos NUNOTA/STATUS_CONFERENCIA não encontrados na resposta do DbExplorer.");
@@ -81,16 +97,15 @@ public class PedidoConferenciaService {
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
-            Long nunota      = readLong(r, iNunota);
-            String status    = readText(r, iStatus);
+            Long nunota       = readLong(r, iNunota);
+            String status     = readText(r, iStatus);
             Integer sequencia = readInt(r, iSeq);
-            Long codProd     = readLong(r, iCodProd);
-            Double qtdNeg    = readDouble(r, iQtdNeg);
-            Double vlrUnit   = readDouble(r, iVlrUnit);
-            Double vlrTot    = readDouble(r, iVlrTot);
+            Long codProd      = readLong(r, iCodProd);
+            Double qtdNeg     = readDouble(r, iQtdNeg);
+            Double vlrUnit    = readDouble(r, iVlrUnit);
+            Double vlrTot     = readDouble(r, iVlrTot);
 
             if (nunota != null && status != null) {
-                // Ajusta o construtor do DTO pra bater com isso aqui
                 result.add(new PedidoConferenciaDto(
                         nunota,
                         status,

@@ -1,10 +1,18 @@
 package com.cemear.fila_conferencia_api.controller;
 
-import com.cemear.fila_conferencia_api.conferencia.*;
+import com.cemear.fila_conferencia_api.conferencia.ConferenciaCriadaDto;
+import com.cemear.fila_conferencia_api.conferencia.ConferenciaWorkflowService;
+import com.cemear.fila_conferencia_api.conferencia.FinalizarConferenciaRequest;
+import com.cemear.fila_conferencia_api.conferencia.IniciarConferenciaRequest;
+import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
+import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaService;
+import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/conferencia")
@@ -14,10 +22,13 @@ public class ConferenciaController {
     private final PedidoConferenciaService pedidoConferenciaService;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
 
-    // 1) Lista pedidos pendentes
+    // 1) Lista pedidos pendentes (paginado)
     @GetMapping("/pedidos-pendentes")
-    public ResponseEntity<?> listarPendentes() {
-        return ResponseEntity.ok(pedidoConferenciaService.listarPendentes());
+    public List<PedidoConferenciaDto> listarPendentes(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int pageSize
+    ) {
+        return pedidoConferenciaService.listarPendentesPaginado(page, pageSize);
     }
 
     // 2) Inicia conferência para um pedido escolhido
@@ -68,7 +79,6 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
-
     // 3) Finaliza conferência (STATUS = 'F')
     @PostMapping("/finalizar")
     public ResponseEntity<?> finalizar(@RequestBody FinalizarConferenciaRequest req) {
@@ -78,9 +88,7 @@ public class ConferenciaController {
                 req.codUsuario()
         );
 
-        // pode devolver só 204, mas pra front é até mais simples:
         return ResponseEntity.ok().build();
     }
-
 
 }
