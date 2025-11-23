@@ -33,7 +33,9 @@ public class AuthController {
     // ---------- UPDATE PUSH TOKEN ----------
     @PostMapping("/update-push-token")
     public ResponseEntity<Void> updatePushToken(@RequestBody PushTokenRequest req) {
+        System.out.println("Update push token body: nome=" + req.nome() + ", pushToken=" + req.pushToken());
         authService.atualizarPushToken(req.nome(), req.pushToken());
         return ResponseEntity.ok().build();
     }
+
 }
