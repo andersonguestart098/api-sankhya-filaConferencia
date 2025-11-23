@@ -9,6 +9,7 @@ import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaService;
 import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +20,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/conferencia")
 @RequiredArgsConstructor
+@Slf4j
 public class ConferenciaController {
 
     private final PedidoConferenciaService pedidoConferenciaService;
@@ -48,6 +50,7 @@ public class ConferenciaController {
     @PostMapping("/iniciar")
     public ResponseEntity<?> iniciar(@RequestBody IniciarConferenciaRequest req) {
 
+        // 2.1 Cria a conferência no Sankhya
         JsonNode resp = conferenciaWorkflowService.iniciarConferencia(
                 req.nunotaOrig(),
                 req.codUsuario()
@@ -66,11 +69,27 @@ public class ConferenciaController {
 
         Long nuconf = nuconfNode.asLong();
 
+        // 2.2 Atualiza NUCONF no cabeçalho da nota (TGFCAB)
         conferenciaWorkflowService.atualizarNuconfCabecalhoNota(
                 req.nunotaOrig(),
                 nuconf
         );
 
+        // 2.3 Preenche itens da conferência (TGFCOI2)
+        try {
+            conferenciaWorkflowService.preencherItensConferencia(
+                    req.nunotaOrig(),
+                    nuconf
+            );
+        } catch (Exception e) {
+            // Se já existirem itens ou der algum problema pontual, loga e segue
+            log.warn(
+                    "Falha ao preencher itens da conferência. nunota={}, nuconf={}",
+                    req.nunotaOrig(), nuconf, e
+            );
+        }
+
+        // 2.4 Resposta pro front
         ConferenciaCriadaDto dtoResposta = new ConferenciaCriadaDto(
                 nuconf,
                 req.nunotaOrig()
@@ -79,6 +98,7 @@ public class ConferenciaController {
         return ResponseEntity.ok(dtoResposta);
     }
 
+    // Rota opcional para reprocessar/preencher itens manualmente, se necessário
     @PostMapping("/preencher-itens")
     public ResponseEntity<?> preencherItens(@RequestBody PreencherItensRequest req) {
 
