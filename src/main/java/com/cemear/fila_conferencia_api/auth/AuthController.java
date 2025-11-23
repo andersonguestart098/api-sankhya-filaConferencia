@@ -3,6 +3,7 @@ package com.cemear.fila_conferencia_api.auth;
 
 import com.cemear.fila_conferencia_api.auth.dto.AuthResponse;
 import com.cemear.fila_conferencia_api.auth.dto.LoginRequest;
+import com.cemear.fila_conferencia_api.auth.dto.PushTokenRequest;
 import com.cemear.fila_conferencia_api.auth.dto.RegisterRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -15,15 +16,24 @@ public class AuthController {
 
     private final AuthService authService;
 
+    // ---------- REGISTER ----------
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody RegisterRequest req) {
         AuthResponse resp = authService.registrar(req);
         return ResponseEntity.ok(resp);
     }
 
+    // ---------- LOGIN ----------
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest req) {
         AuthResponse resp = authService.login(req);
         return ResponseEntity.ok(resp);
+    }
+
+    // ---------- UPDATE PUSH TOKEN ----------
+    @PostMapping("/update-push-token")
+    public ResponseEntity<Void> updatePushToken(@RequestBody PushTokenRequest req) {
+        authService.atualizarPushToken(req.nome(), req.pushToken());
+        return ResponseEntity.ok().build();
     }
 }

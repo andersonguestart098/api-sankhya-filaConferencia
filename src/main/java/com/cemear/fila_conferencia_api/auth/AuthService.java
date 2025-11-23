@@ -17,20 +17,24 @@ public class AuthService {
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
+    // ---------- REGISTER ----------
     public AuthResponse registrar(RegisterRequest req) {
-        if (usuarioRepository.existsByEmail(req.email())) {
-            throw new IllegalArgumentException("E-mail já cadastrado.");
+        // valida nome único (em vez de e-mail)
+        if (usuarioRepository.existsByNome(req.nome())) {
+            throw new IllegalArgumentException("Nome de usuário já cadastrado.");
         }
 
         Usuario u = new Usuario();
         u.setNome(req.nome());
+        // email agora é opcional, se quiser manter no DTO:
         u.setEmail(req.email());
         u.setSenhaHash(passwordEncoder.encode(req.senha()));
         u.setAvatarUrl(req.avatarUrl());
 
         usuarioRepository.save(u);
 
-        String token = jwtService.gerarToken(u.getId(), u.getEmail());
+        // 👇 subject do token agora é o NOME
+        String token = jwtService.gerarToken(u.getId(), u.getNome());
 
         return new AuthResponse(
                 token,
@@ -41,6 +45,7 @@ public class AuthService {
         );
     }
 
+    // ---------- LOGIN (por nome + senha) ----------
     public AuthResponse login(LoginRequest req) {
         Usuario u = usuarioRepository.findByNome(req.nome())
                 .orElseThrow(() -> new IllegalArgumentException("Usuário ou senha inválidos."));
@@ -49,7 +54,8 @@ public class AuthService {
             throw new IllegalArgumentException("Usuário ou senha inválidos.");
         }
 
-        String token = jwtService.gerarToken(u.getId(), u.getEmail());
+        // idem: subject = nome
+        String token = jwtService.gerarToken(u.getId(), u.getNome());
 
         return new AuthResponse(
                 token,
@@ -58,6 +64,17 @@ public class AuthService {
                 u.getEmail(),
                 u.getAvatarUrl()
         );
+    }
+
+    // ---------- ATUALIZAR PUSH TOKEN ----------
+    public void atualizarPushToken(String nome, String pushToken) {
+        Usuario usuario = usuarioRepository.findByNome(nome)
+                .orElseThrow(() -> new RuntimeException("Usuário não encontrado para nome: " + nome));
+
+        usuario.setPushToken(pushToken);
+        usuarioRepository.save(usuario);
+
+        System.out.println("Push token salvo para " + nome + ": " + pushToken);
     }
 
 }

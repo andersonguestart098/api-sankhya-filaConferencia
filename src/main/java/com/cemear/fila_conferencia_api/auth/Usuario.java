@@ -22,6 +22,8 @@ public class Usuario {
 
     private String avatarUrl;
 
+    private String pushToken;
+
     // já pensando no Firebase
     private List<String> deviceTokens;
 }
