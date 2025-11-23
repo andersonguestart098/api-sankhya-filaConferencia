@@ -1,12 +1,17 @@
 // src/main/java/com/cemear/fila_conferencia_api/conferencia/PedidosPendentesScheduler.java
 package com.cemear.fila_conferencia_api.conferencia;
 
+import com.cemear.fila_conferencia_api.auth.PushService;
+import com.cemear.fila_conferencia_api.auth.Usuario;
+import com.cemear.fila_conferencia_api.auth.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -14,22 +19,55 @@ import java.util.List;
 public class PedidosPendentesScheduler {
 
     private final PedidoConferenciaService pedidoConferenciaService;
+    private final PushService pushService;
+    private final UsuarioRepository usuarioRepository;
 
-    // roda a cada 30 segundos (30000 ms)
-    @Scheduled(fixedDelay = 30000)
+    // snapshot local das NUNOTAS já vistas
+    private Set<Long> ultimoSnapshot = new HashSet<>();
+
+    @Scheduled(fixedDelay = 30000) // 30s
     public void verificarPedidosPendentes() {
+
         try {
-            // ✅ usa o método que já existe no service
             List<PedidoConferenciaDto> pendentes =
                     pedidoConferenciaService.listarPendentes();
 
-            log.info("Scheduler - pedidos pendentes: {}", pendentes.size());
+            // monta o conjunto atual de NUNOTAS
+            Set<Long> atual = new HashSet<>();
+            for (PedidoConferenciaDto p : pendentes) {
+                if (p.getNunota() != null) {
+                    atual.add(p.getNunota());
+                }
+            }
 
-            // aqui depois você pode:
-            // - detectar novos NUNOTA
-            // - mandar push pro conferente, etc.
+            // novos itens = atual - ultimoSnapshot
+            Set<Long> novos = new HashSet<>(atual);
+            novos.removeAll(ultimoSnapshot);
+
+            if (!novos.isEmpty()) {
+                log.info("Novos pedidos encontrados: {}", novos);
+
+                // busca todos usuários com pushToken preenchido
+                List<Usuario> usuarios = usuarioRepository.findAll();
+
+                for (Long nunota : novos) {
+                    String titulo = "Novo pedido na fila";
+                    String corpo  = "Pedido " + nunota + " aguardando conferência";
+
+                    for (Usuario u : usuarios) {
+                        String token = u.getPushToken();
+                        if (token != null && !token.isBlank()) {
+                            pushService.enviarPush(token, titulo, corpo);
+                        }
+                    }
+                }
+            }
+
+            // atualiza snapshot
+            ultimoSnapshot = atual;
+
         } catch (Exception e) {
-            log.error("Erro ao executar scheduler de pedidos pendentes", e);
+            log.error("Erro no scheduler de pedidos pendentes: {}", e.getMessage(), e);
         }
     }
 }
