@@ -1,5 +1,5 @@
 // src/main/java/com/cemear/fila_conferencia_api/auth/PushService.java
-package com.cemear.fila_conferencia_api.auth.PushService;
+package com.cemear.fila_conferencia_api.auth;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.FirebaseMessagingException;
@@ -13,17 +13,17 @@ public class PushService {
 
     public void enviarPush(String token, String titulo, String corpo) {
         try {
-            // 🔹 Notification = o que aparece visualmente no Android
+            // Notificação visual que aparece no Android
             com.google.firebase.messaging.Notification notification =
                     com.google.firebase.messaging.Notification.builder()
                             .setTitle(titulo)
                             .setBody(corpo)
                             .build();
 
-            // 🔹 Data = se você quiser ainda ler no app (onMessage)
+            // Mensagem completa enviada ao FCM
             Message message = Message.builder()
                     .setToken(token)
-                    .setNotification(notification)      // <- ESSENCIAL pro banner
+                    .setNotification(notification) // importante pro banner
                     .putData("title", titulo)
                     .putData("body", corpo)
                     .build();
