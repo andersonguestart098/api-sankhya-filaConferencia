@@ -22,7 +22,7 @@ public class PedidosPendentesScheduler {
     private final PushService pushService;
     private final UsuarioRepository usuarioRepository;
 
-    // snapshot local das NUNOTAS já vistas
+    // snapshot local das NUNOTAS já vistas (somente status AC)
     private Set<Long> ultimoSnapshot = new HashSet<>();
 
     @Scheduled(fixedDelay = 30000) // 30s
@@ -32,10 +32,11 @@ public class PedidosPendentesScheduler {
             List<PedidoConferenciaDto> pendentes =
                     pedidoConferenciaService.listarPendentes();
 
-            // monta o conjunto atual de NUNOTAS
+            // monta o conjunto atual de NUNOTAS COM STATUS AC
             Set<Long> atual = new HashSet<>();
             for (PedidoConferenciaDto p : pendentes) {
-                if (p.getNunota() != null) {
+                if (p.getNunota() != null
+                        && "AC".equals(p.getStatusConferencia())) {
                     atual.add(p.getNunota());
                 }
             }
@@ -45,7 +46,7 @@ public class PedidosPendentesScheduler {
             novos.removeAll(ultimoSnapshot);
 
             if (!novos.isEmpty()) {
-                log.info("Novos pedidos encontrados: {}", novos);
+                log.info("Novos pedidos (STATUS AC) encontrados: {}", novos);
 
                 // busca todos usuários com pushToken preenchido
                 List<Usuario> usuarios = usuarioRepository.findAll();
@@ -63,7 +64,7 @@ public class PedidosPendentesScheduler {
                 }
             }
 
-            // atualiza snapshot
+            // atualiza snapshot só com os AC atuais
             ultimoSnapshot = atual;
 
         } catch (Exception e) {
