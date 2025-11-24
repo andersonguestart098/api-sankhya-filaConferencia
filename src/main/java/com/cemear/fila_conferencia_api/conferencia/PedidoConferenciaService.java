@@ -30,6 +30,7 @@ public class PedidoConferenciaService {
                 ITE.SEQUENCIA,
                 ITE.CODPROD,
                 PRO.DESCRPROD AS DESCRICAO,
+                ITE.CODVOL                   AS UNIDADE,
                 ITE.QTDNEG,
                 ITE.VLRUNIT,
                 ITE.VLRTOT,
@@ -130,6 +131,7 @@ public class PedidoConferenciaService {
         int iSeq        = indexOf(cols, "SEQUENCIA");
         int iCodProd    = indexOf(cols, "CODPROD");
         int iDescricao  = indexOf(cols, "DESCRICAO");   // descrição do produto
+        int iUnidade    = indexOf(cols, "UNIDADE");     // 🔥 CODVOL do item
         int iQtdNeg     = indexOf(cols, "QTDNEG");
         int iVlrUnit    = indexOf(cols, "VLRUNIT");
         int iVlrTot     = indexOf(cols, "VLRTOT");
@@ -150,6 +152,7 @@ public class PedidoConferenciaService {
             Integer sequencia = readInt(r, iSeq);
             Long codProd      = readLong(r, iCodProd);
             String descricao  = readText(r, iDescricao);
+            String unidade    = readText(r, iUnidade);   // ex: MT, PC, CX
             Double qtdNeg     = readDouble(r, iQtdNeg);
             Double vlrUnit    = readDouble(r, iVlrUnit);
             Double vlrTot     = readDouble(r, iVlrTot);
@@ -170,6 +173,7 @@ public class PedidoConferenciaService {
                     sequencia,
                     codProd,
                     descricao,
+                    unidade,
                     qtdNeg,
                     vlrUnit,
                     vlrTot
