@@ -221,6 +221,42 @@ public class ConferenciaWorkflowService {
         );
     }
 
+    // ---------------------------------
+// NOVO: finalizar conferência divergente (STATUS = D)
+// ---------------------------------
+    public JsonNode finalizarConferenciaDivergente(Long nuconf, Long codUsuario) {
+        String agora = LocalDateTime.now().format(FMT);
+
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode requestBody = root.putObject("requestBody");
+        ObjectNode dataSet = requestBody.putObject("dataSet");
+
+        dataSet.put("rootEntity", "CabecalhoConferencia");
+        dataSet.put("includePresentationFields", "S");
+
+        ObjectNode dataRow = dataSet.putObject("dataRow");
+        ObjectNode localFields = dataRow.putObject("localFields");
+
+        localFields.putObject("STATUS").put("$", "D");  // 🔥 aqui está a diferença
+        localFields.putObject("DHFINCONF").put("$", agora);
+        localFields.putObject("CODUSUCONF").put("$", codUsuario.toString());
+
+        ObjectNode key = dataRow.putObject("key");
+        key.putObject("NUCONF").put("$", nuconf.toString());
+
+        ObjectNode entity = dataSet.putObject("entity");
+        ObjectNode fieldSet = entity.putObject("fieldSet");
+        fieldSet.put("list",
+                "NUCONF,NUNOTAORIG,STATUS,DHINICONF,DHFINCONF,CODUSUCONF"
+        );
+
+        return gatewayClient.callService(
+                "CRUDServiceProvider.saveRecord",
+                root
+        );
+    }
+
+
     // ----------------- helpers reaproveitados -----------------
 
     private static List<String> extractColumns(JsonNode fieldsMetadata) {

@@ -122,4 +122,16 @@ public class ConferenciaController {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/finalizar-divergente")
+    public ResponseEntity<?> finalizarDivergente(@RequestBody FinalizarConferenciaRequest req) {
+
+        conferenciaWorkflowService.finalizarConferenciaDivergente(
+                req.nuconf(),
+                req.codUsuario()
+        );
+
+        return ResponseEntity.ok().build();
+    }
+
+
 }
