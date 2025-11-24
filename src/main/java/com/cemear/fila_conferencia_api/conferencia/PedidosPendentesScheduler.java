@@ -35,11 +35,14 @@ public class PedidosPendentesScheduler {
             // monta o conjunto atual de NUNOTAS COM STATUS AC
             Set<Long> atual = new HashSet<>();
             for (PedidoConferenciaDto p : pendentes) {
+                String status = p.getStatusConferencia();
+
                 if (p.getNunota() != null
-                        && "AC".equals(p.getStatusConferencia())) {
+                        && ("AC".equals(status) || "R".equals(status))) {
                     atual.add(p.getNunota());
                 }
             }
+
 
             // novos itens = atual - ultimoSnapshot
             Set<Long> novos = new HashSet<>(atual);
