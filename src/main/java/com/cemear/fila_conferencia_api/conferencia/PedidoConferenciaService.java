@@ -29,6 +29,7 @@ public class PedidoConferenciaService {
                 X.STATUS_CONFERENCIA,
                 ITE.SEQUENCIA,
                 ITE.CODPROD,
+                PRO.DESCRPROD AS DESCRICAO,
                 ITE.QTDNEG,
                 ITE.VLRUNIT,
                 ITE.VLRTOT,
@@ -43,6 +44,8 @@ public class PedidoConferenciaService {
             ) X
             JOIN TGFITE ITE
                 ON ITE.NUNOTA = X.NUNOTA
+            JOIN TGFPRO PRO
+                ON PRO.CODPROD = ITE.CODPROD
             WHERE X.STATUS_CONFERENCIA IN (
                 'A', 'AC', 'AL', 'C',
                 'D', 'F',
@@ -95,7 +98,6 @@ public class PedidoConferenciaService {
         // ---------- Filtro de status ----------
         String filtroStatusSql = "";
         if (status != null && !status.isBlank()) {
-            // aqui dá pra validar se status é um dos válidos (A, AC, AL, ...)
             filtroStatusSql = " AND X.STATUS_CONFERENCIA = '" + status.trim() + "'";
         }
 
@@ -123,13 +125,14 @@ public class PedidoConferenciaService {
 
         List<String> cols = extractColumns(fieldsMetadata);
 
-        int iNunota   = indexOf(cols, "NUNOTA");
-        int iStatus   = indexOf(cols, "STATUS_CONFERENCIA");
-        int iSeq      = indexOf(cols, "SEQUENCIA");
-        int iCodProd  = indexOf(cols, "CODPROD");
-        int iQtdNeg   = indexOf(cols, "QTDNEG");
-        int iVlrUnit  = indexOf(cols, "VLRUNIT");
-        int iVlrTot   = indexOf(cols, "VLRTOT");
+        int iNunota     = indexOf(cols, "NUNOTA");
+        int iStatus     = indexOf(cols, "STATUS_CONFERENCIA");
+        int iSeq        = indexOf(cols, "SEQUENCIA");
+        int iCodProd    = indexOf(cols, "CODPROD");
+        int iDescricao  = indexOf(cols, "DESCRICAO");   // 👈 NOVO
+        int iQtdNeg     = indexOf(cols, "QTDNEG");
+        int iVlrUnit    = indexOf(cols, "VLRUNIT");
+        int iVlrTot     = indexOf(cols, "VLRTOT");
 
         if (iNunota < 0 || iStatus < 0) {
             log.error("Campos obrigatórios não encontrados em fieldsMetadata: {}", cols);
@@ -146,6 +149,7 @@ public class PedidoConferenciaService {
             String st         = readText(r, iStatus);
             Integer sequencia = readInt(r, iSeq);
             Long codProd      = readLong(r, iCodProd);
+            String descricao  = readText(r, iDescricao);   // 👈 NOVO
             Double qtdNeg     = readDouble(r, iQtdNeg);
             Double vlrUnit    = readDouble(r, iVlrUnit);
             Double vlrTot     = readDouble(r, iVlrTot);
@@ -165,6 +169,7 @@ public class PedidoConferenciaService {
             pedido.addItem(new ItemConferenciaDto(
                     sequencia,
                     codProd,
+                    descricao,  // 👈 AGORA O CONSTRUTOR BATE
                     qtdNeg,
                     vlrUnit,
                     vlrTot

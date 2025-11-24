@@ -130,7 +130,6 @@ public class ConferenciaWorkflowService {
         int iSequencia = indexOf(cols, "SEQUENCIA");
         int iCodprod   = indexOf(cols, "CODPROD");
         int iCodvol    = indexOf(cols, "CODVOL");
-        int iDescrProd  = indexOf(cols, "DESCRPROD");
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 

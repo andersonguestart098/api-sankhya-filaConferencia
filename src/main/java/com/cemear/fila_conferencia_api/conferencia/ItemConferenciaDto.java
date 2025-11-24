@@ -11,7 +11,9 @@ public class ItemConferenciaDto {
 
     private Integer sequencia;
     private Long codProd;
+    private String descricao;
     private Double qtdNeg;
     private Double vlrUnit;
     private Double vlrTot;
+
 }
