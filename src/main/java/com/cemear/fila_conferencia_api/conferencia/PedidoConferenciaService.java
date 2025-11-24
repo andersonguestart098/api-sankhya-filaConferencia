@@ -1,7 +1,5 @@
 package com.cemear.fila_conferencia_api.conferencia;
 
-import com.cemear.fila_conferencia_api.auth.Usuario;
-import com.cemear.fila_conferencia_api.auth.UsuarioRepository;
 import com.cemear.fila_conferencia_api.sankhya.SankhyaGatewayClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -21,7 +19,6 @@ import java.util.List;
 public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
-    private final UsuarioRepository usuarioRepository; // 🔥 Mongo
 
     // Template com PLACEHOLDERS para filtros + paginação
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
@@ -30,8 +27,6 @@ public class PedidoConferenciaService {
             SELECT
                 X.NUNOTA,
                 X.STATUS_CONFERENCIA,
-                X.NUCONFATUAL,
-                USU.NOMEUSU AS NOME_CONFERENTE,
                 ITE.SEQUENCIA,
                 ITE.CODPROD,
                 PRO.DESCRPROD AS DESCRICAO,
@@ -42,7 +37,6 @@ public class PedidoConferenciaService {
             FROM (
                 SELECT
                     CAB.NUNOTA,
-                    CAB.NUCONFATUAL,
                     SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
                 FROM TGFCAB CAB
                 WHERE 1 = 1
@@ -52,10 +46,6 @@ public class PedidoConferenciaService {
                 ON ITE.NUNOTA = X.NUNOTA
             JOIN TGFPRO PRO
                 ON PRO.CODPROD = ITE.CODPROD
-            LEFT JOIN TGFCOI CONF
-                ON CONF.NUCONF = X.NUCONFATUAL
-            LEFT JOIN TSIUSU USU
-                ON USU.CODUSU = CONF.CODUSUCONF
             WHERE X.STATUS_CONFERENCIA IN (
                 'A', 'AC', 'AL', 'C',
                 'D', 'F',
@@ -135,15 +125,14 @@ public class PedidoConferenciaService {
 
         List<String> cols = extractColumns(fieldsMetadata);
 
-        int iNunota        = indexOf(cols, "NUNOTA");
-        int iStatus        = indexOf(cols, "STATUS_CONFERENCIA");
-        int iNomeConf      = indexOf(cols, "NOME_CONFERENTE");
-        int iSeq           = indexOf(cols, "SEQUENCIA");
-        int iCodProd       = indexOf(cols, "CODPROD");
-        int iDescricao     = indexOf(cols, "DESCRICAO");
-        int iQtdNeg        = indexOf(cols, "QTDNEG");
-        int iVlrUnit       = indexOf(cols, "VLRUNIT");
-        int iVlrTot        = indexOf(cols, "VLRTOT");
+        int iNunota     = indexOf(cols, "NUNOTA");
+        int iStatus     = indexOf(cols, "STATUS_CONFERENCIA");
+        int iSeq        = indexOf(cols, "SEQUENCIA");
+        int iCodProd    = indexOf(cols, "CODPROD");
+        int iDescricao  = indexOf(cols, "DESCRICAO");   // descrição do produto
+        int iQtdNeg     = indexOf(cols, "QTDNEG");
+        int iVlrUnit    = indexOf(cols, "VLRUNIT");
+        int iVlrTot     = indexOf(cols, "VLRTOT");
 
         if (iNunota < 0 || iStatus < 0) {
             log.error("Campos obrigatórios não encontrados em fieldsMetadata: {}", cols);
@@ -158,7 +147,6 @@ public class PedidoConferenciaService {
 
             Long nunota       = readLong(r, iNunota);
             String st         = readText(r, iStatus);
-            String nomeConf   = readText(r, iNomeConf);
             Integer sequencia = readInt(r, iSeq);
             Long codProd      = readLong(r, iCodProd);
             String descricao  = readText(r, iDescricao);
@@ -170,30 +158,10 @@ public class PedidoConferenciaService {
                 continue;
             }
 
-            // tenta achar o usuário no Mongo pra pegar avatarUrl
-            String avatarUrl = null;
-            String nomeConferente = nomeConf;
-
-            if (nomeConf != null && !nomeConf.isBlank()) {
-                try {
-                    avatarUrl = usuarioRepository
-                            .findByNomeIgnoreCase(nomeConf.trim())
-                            .map(Usuario::getAvatarUrl)
-                            .orElse(null);
-                } catch (Exception e) {
-                    log.warn("Falha ao buscar avatar do usuário '{}' no Mongo.", nomeConf, e);
-                }
-            }
-
             // pega (ou cria) o pedido
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
-                pedido = new PedidoConferenciaDto(
-                        nunota,
-                        st,
-                        nomeConferente,
-                        avatarUrl
-                );
+                pedido = new PedidoConferenciaDto(nunota, st);
                 pedidosMap.put(nunota, pedido);
             }
 
