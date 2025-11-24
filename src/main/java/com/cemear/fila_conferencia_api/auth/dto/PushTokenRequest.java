@@ -2,6 +2,5 @@
 package com.cemear.fila_conferencia_api.auth.dto;
 
 public record PushTokenRequest(
-        String nome,
         String pushToken
 ) {}

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final JwtService jwtService;
 
     // ---------- REGISTER ----------
     @PostMapping("/register")
@@ -30,12 +31,21 @@ public class AuthController {
         return ResponseEntity.ok(resp);
     }
 
-    // ---------- UPDATE PUSH TOKEN ----------
+    // ---------- UPDATE PUSH TOKEN (FCM) ----------
     @PostMapping("/update-push-token")
-    public ResponseEntity<Void> updatePushToken(@RequestBody PushTokenRequest req) {
-        System.out.println("Update push token body: nome=" + req.nome() + ", pushToken=" + req.pushToken());
-        authService.atualizarPushToken(req.nome(), req.pushToken());
+    public ResponseEntity<Void> updatePushToken(
+            @RequestBody PushTokenRequest req,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        // "Bearer xxx" -> "xxx"
+        String token = authHeader.replace("Bearer ", "");
+
+        // subject do JWT = NOME do usuário (como você montou no AuthService)
+        String nome = jwtService.extrairSubject(token);
+
+        System.out.println("Update push token: usuario=" + nome + ", token=" + req.pushToken());
+
+        authService.atualizarPushToken(nome, req.pushToken());
         return ResponseEntity.ok().build();
     }
-
 }
