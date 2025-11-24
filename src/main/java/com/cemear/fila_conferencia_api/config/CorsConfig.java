@@ -13,7 +13,8 @@ public class CorsConfig implements WebMvcConfigurer {
                 // libera as origens do teu frontend web
                 .allowedOrigins(
                         "http://localhost:3000",   // React local
-                        "http://localhost:5173"    // Vite (se usar)
+                        "http://localhost:5173",    // Vite (se usar)
+                        "https://fila-conferencia-dash-irbh.vercel.app"
                         // adiciona aqui o domínio em produção depois
                         // "https://fila-conferencia-web.vercel.app"
                 )
