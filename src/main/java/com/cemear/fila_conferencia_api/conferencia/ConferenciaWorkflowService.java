@@ -98,10 +98,12 @@ public class ConferenciaWorkflowService {
             SELECT
                 i.SEQUENCIA,
                 i.CODPROD,
+                p.DESCRPROD,
                 i.CODVOL,
                 i.CONTROLE,
                 i.QTDNEG
             FROM TGFITE i
+            JOIN TGFPRO p ON p.CODPROD = i.CODPROD
             WHERE i.NUNOTA = %d
             """.formatted(nunotaOrig);
 
@@ -128,6 +130,7 @@ public class ConferenciaWorkflowService {
         int iSequencia = indexOf(cols, "SEQUENCIA");
         int iCodprod   = indexOf(cols, "CODPROD");
         int iCodvol    = indexOf(cols, "CODVOL");
+        int iDescrProd  = indexOf(cols, "DESCRPROD");
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 
