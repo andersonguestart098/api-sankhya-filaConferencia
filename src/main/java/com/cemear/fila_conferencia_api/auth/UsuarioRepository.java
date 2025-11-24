@@ -7,8 +7,9 @@ import java.util.Optional;
 
 public interface UsuarioRepository extends MongoRepository<Usuario, String> {
 
+    // usado no login (como você já tinha)
     Optional<Usuario> findByNome(String nome);
 
-    // 👇 adiciona isso:
-    boolean existsByNome(String nome);
+    // 🔥 novo: usado na conferência para casar com NOMEUSU do Sankhya
+    Optional<Usuario> findByNomeIgnoreCase(String nome);
 }
