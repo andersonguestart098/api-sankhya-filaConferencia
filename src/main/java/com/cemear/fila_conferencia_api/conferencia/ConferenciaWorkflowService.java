@@ -239,7 +239,7 @@ public class ConferenciaWorkflowService {
         ObjectNode dataRow = dataSet.putObject("dataRow");
         ObjectNode localFields = dataRow.putObject("localFields");
 
-        localFields.putObject("STATUS").put("$", "D");  // 🔥 aqui está a diferença
+        localFields.putObject("STATUS").put("$", "C");  // 🔥 aqui está a diferença
         localFields.putObject("DHFINCONF").put("$", agora);
         localFields.putObject("CODUSUCONF").put("$", codUsuario.toString());
 
