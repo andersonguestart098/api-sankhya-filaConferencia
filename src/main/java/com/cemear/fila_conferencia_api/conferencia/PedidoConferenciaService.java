@@ -22,42 +22,52 @@ public class PedidoConferenciaService {
 
     // Template com PLACEHOLDERS para filtros + paginação
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
-        SELECT *
+    SELECT *
+    FROM (
+        SELECT
+            X.NUNOTA,
+            CAB.NUMNOTA,
+            PAR.NOMEPARC,
+            X.STATUS_CONFERENCIA,
+            ITE.SEQUENCIA,
+            ITE.CODPROD,
+            PRO.DESCRPROD AS DESCRICAO,
+            ITE.CODVOL                       AS UNIDADE,
+            ITE.QTDNEG,
+            ITE.VLRUNIT,
+            ITE.VLRTOT,
+            ROW_NUMBER() OVER (
+                ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
+            ) AS RN
         FROM (
             SELECT
-                X.NUNOTA,
-                X.STATUS_CONFERENCIA,
-                ITE.SEQUENCIA,
-                ITE.CODPROD,
-                PRO.DESCRPROD AS DESCRICAO,
-                ITE.CODVOL                   AS UNIDADE,
-                ITE.QTDNEG,
-                ITE.VLRUNIT,
-                ITE.VLRTOT,
-                ROW_NUMBER() OVER (ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA) AS RN
-            FROM (
-                SELECT
-                    CAB.NUNOTA,
-                    SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
-                FROM TGFCAB CAB
-                WHERE 1 = 1
-                  %s  -- Filtro de data
-            ) X
-            JOIN TGFITE ITE
-                ON ITE.NUNOTA = X.NUNOTA
-            JOIN TGFPRO PRO
-                ON PRO.CODPROD = ITE.CODPROD
-            WHERE X.STATUS_CONFERENCIA IN (
-                'A', 'AC', 'AL', 'C',
-                'D', 'F',
-                'R', 'RA', 'RD', 'RF',
-                'Z'
-            )
-              %s  -- Filtro de status
+                CAB.NUNOTA,
+                CAB.CODPARC,
+                SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
+            FROM TGFCAB CAB
+            WHERE 1 = 1
+              %s   -- Filtro de data
+        ) X
+        JOIN TGFCAB CAB
+            ON CAB.NUNOTA = X.NUNOTA
+        JOIN TGFPAR PAR
+            ON PAR.CODPARC = CAB.CODPARC
+        JOIN TGFITE ITE
+            ON ITE.NUNOTA = X.NUNOTA
+        JOIN TGFPRO PRO
+            ON PRO.CODPROD = ITE.CODPROD
+        WHERE X.STATUS_CONFERENCIA IN (
+            'A', 'AC', 'AL', 'C',
+            'D', 'F',
+            'R', 'RA', 'RD', 'RF',
+            'Z'
         )
-        WHERE RN BETWEEN %d AND %d
-        ORDER BY RN
-        """;
+          %s   -- Filtro de status
+    )
+    WHERE RN BETWEEN %d AND %d
+    ORDER BY RN
+    """;
+
 
     // opcional: método default sem filtros (se usar em outro lugar)
     public List<PedidoConferenciaDto> listarPendentes() {
@@ -74,7 +84,7 @@ public class PedidoConferenciaService {
     ) {
 
         int inicio = page * pageSize + 1;          // RN começa em 1
-        int fim    = inicio + pageSize - 1;
+        int fim = inicio + pageSize - 1;
 
         // ---------- Filtro de data ----------
         String filtroDataSql;
@@ -85,15 +95,15 @@ public class PedidoConferenciaService {
             String fimStr = dataFim.format(fmt);
 
             filtroDataSql = String.format("""
-                AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
-                AND CAB.DTNEG <  TO_DATE('%s', 'DD/MM/YYYY') + 1
-                """, iniStr, fimStr);
+                    AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
+                    AND CAB.DTNEG <  TO_DATE('%s', 'DD/MM/YYYY') + 1
+                    """, iniStr, fimStr);
         } else {
             // default: mês atual
             filtroDataSql = """
-                AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
-                AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
-                """;
+                    AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
+                    AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+                    """;
         }
 
         // ---------- Filtro de status ----------
@@ -113,9 +123,9 @@ public class PedidoConferenciaService {
 
         JsonNode root = gatewayClient.executeDbExplorer(sql);
 
-        JsonNode responseBody   = root.path("responseBody");
+        JsonNode responseBody = root.path("responseBody");
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
-        JsonNode rowsNode       = responseBody.path("rows");
+        JsonNode rowsNode = responseBody.path("rows");
 
         if (!rowsNode.isArray()) {
             log.error("Resposta inesperada do DbExplorer: {}", root.toPrettyString());
@@ -126,15 +136,18 @@ public class PedidoConferenciaService {
 
         List<String> cols = extractColumns(fieldsMetadata);
 
-        int iNunota     = indexOf(cols, "NUNOTA");
-        int iStatus     = indexOf(cols, "STATUS_CONFERENCIA");
-        int iSeq        = indexOf(cols, "SEQUENCIA");
-        int iCodProd    = indexOf(cols, "CODPROD");
-        int iDescricao  = indexOf(cols, "DESCRICAO");   // descrição do produto
-        int iUnidade    = indexOf(cols, "UNIDADE");     // 🔥 CODVOL do item
-        int iQtdNeg     = indexOf(cols, "QTDNEG");
-        int iVlrUnit    = indexOf(cols, "VLRUNIT");
-        int iVlrTot     = indexOf(cols, "VLRTOT");
+        int iNunota = indexOf(cols, "NUNOTA");
+        int iNumNota = indexOf(cols, "NUMNOTA");     // 👈 número da nota (TGFCAB.NUMNOTA)
+        int iNomeParc = indexOf(cols, "NOMEPARC");    // 👈 nome do parceiro/cliente
+        int iStatus = indexOf(cols, "STATUS_CONFERENCIA");
+        int iSeq = indexOf(cols, "SEQUENCIA");
+        int iCodProd = indexOf(cols, "CODPROD");
+        int iDescricao = indexOf(cols, "DESCRICAO");   // descrição do produto
+        int iUnidade = indexOf(cols, "UNIDADE");     // CODVOL do item
+        int iQtdNeg = indexOf(cols, "QTDNEG");
+        int iVlrUnit = indexOf(cols, "VLRUNIT");
+        int iVlrTot = indexOf(cols, "VLRTOT");
+
 
         if (iNunota < 0 || iStatus < 0) {
             log.error("Campos obrigatórios não encontrados em fieldsMetadata: {}", cols);
@@ -147,15 +160,17 @@ public class PedidoConferenciaService {
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
-            Long nunota       = readLong(r, iNunota);
-            String st         = readText(r, iStatus);
+            Long nunota = readLong(r, iNunota);
+            Long numNota = (iNumNota >= 0) ? readLong(r, iNumNota) : null;
+            String nomeParc = (iNomeParc >= 0) ? readText(r, iNomeParc) : null;
+            String st = readText(r, iStatus);
             Integer sequencia = readInt(r, iSeq);
-            Long codProd      = readLong(r, iCodProd);
-            String descricao  = readText(r, iDescricao);
-            String unidade    = readText(r, iUnidade);   // ex: MT, PC, CX
-            Double qtdNeg     = readDouble(r, iQtdNeg);
-            Double vlrUnit    = readDouble(r, iVlrUnit);
-            Double vlrTot     = readDouble(r, iVlrTot);
+            Long codProd = readLong(r, iCodProd);
+            String descricao = readText(r, iDescricao);
+            String unidade = readText(r, iUnidade);   // ex: MT, PC, CX
+            Double qtdNeg = readDouble(r, iQtdNeg);
+            Double vlrUnit = readDouble(r, iVlrUnit);
+            Double vlrTot = readDouble(r, iVlrTot);
 
             if (nunota == null || st == null) {
                 continue;
@@ -164,8 +179,17 @@ public class PedidoConferenciaService {
             // pega (ou cria) o pedido
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
-                pedido = new PedidoConferenciaDto(nunota, st);
+                // 👇 agora passando numNota e nomeParc pro DTO novo
+                pedido = new PedidoConferenciaDto(nunota, numNota, nomeParc, st);
                 pedidosMap.put(nunota, pedido);
+            } else {
+                // se já existia, garante que numNota/nomeParc estão preenchidos
+                if (pedido.getNumNota() == null) {
+                    pedido.setNumNota(numNota);
+                }
+                if (pedido.getNomeParc() == null) {
+                    pedido.setNomeParc(nomeParc);
+                }
             }
 
             // adiciona o item
@@ -183,7 +207,7 @@ public class PedidoConferenciaService {
         return new ArrayList<>(pedidosMap.values());
     }
 
-    // ---------- helpers ----------
+        // ---------- helpers ----------
 
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
