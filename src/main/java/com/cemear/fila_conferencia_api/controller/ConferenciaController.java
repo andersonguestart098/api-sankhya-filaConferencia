@@ -4,6 +4,7 @@ import com.cemear.fila_conferencia_api.conferencia.ConferenciaCriadaDto;
 import com.cemear.fila_conferencia_api.conferencia.ConferenciaWorkflowService;
 import com.cemear.fila_conferencia_api.conferencia.FinalizarConferenciaRequest;
 import com.cemear.fila_conferencia_api.conferencia.IniciarConferenciaRequest;
+import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest; // 👈 mantém daqui
 import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
 import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaService;
 import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
@@ -24,7 +25,7 @@ import java.util.List;
 public class ConferenciaController {
 
     private final PedidoConferenciaService pedidoConferenciaService;
-    private final ConferenciaWorkflowService conferenciaWorkflowService;
+    private final ConferenciaWorkflowService conferenciaWorkflowService; // 👈 é ESTE o service
 
     // 1) Lista pedidos pendentes (paginado + filtros)
     @GetMapping("/pedidos-pendentes")
@@ -122,16 +123,11 @@ public class ConferenciaController {
         return ResponseEntity.ok().build();
     }
 
+    // 4) Finaliza conferência divergente (STATUS = 'D')
     @PostMapping("/finalizar-divergente")
-    public ResponseEntity<?> finalizarDivergente(@RequestBody FinalizarConferenciaRequest req) {
-
-        conferenciaWorkflowService.finalizarConferenciaDivergente(
-                req.nuconf(),
-                req.codUsuario()
-        );
-
-        return ResponseEntity.ok().build();
+    public JsonNode finalizarDivergente(@RequestBody FinalizarDivergenteRequest req) {
+        // 👇 aqui estava `workflowService`, troquei para `conferenciaWorkflowService`
+        return conferenciaWorkflowService.finalizarConferenciaDivergente(req);
     }
-
 
 }
