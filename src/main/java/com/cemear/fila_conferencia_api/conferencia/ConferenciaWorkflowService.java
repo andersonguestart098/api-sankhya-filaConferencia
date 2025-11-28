@@ -14,10 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -139,10 +136,6 @@ public class ConferenciaWorkflowService {
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
-
-        log.info("DEBUG_QTD_ORIGINAL_ROWS nunotaOrig={} totalLinhas={}", nunotaOrig, rows.size());
-        log.info("DEBUG_QTD_ORIGINAL_FIELDS nunotaOrig={} fields={}", nunotaOrig, fieldsMetadata.toPrettyString());
-
         List<String> cols = extractColumns(fieldsMetadata);
 
         int iSequencia = indexOf(cols, "SEQUENCIA");
@@ -151,10 +144,8 @@ public class ConferenciaWorkflowService {
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 
-        // mapa temporário para essa nota
         Map<Integer, Double> mapaQtdOriginal = new HashMap<>();
 
-        // 2) Monta o body do DetalhesConferencia com dataRow[]
         ObjectNode rootReq = objectMapper.createObjectNode();
         ObjectNode requestBody2 = rootReq.putObject("requestBody");
         ObjectNode dataSet = requestBody2.putObject("dataSet");
@@ -169,7 +160,7 @@ public class ConferenciaWorkflowService {
             if (!r.isArray()) continue;
 
             String seqConf = readText(r, iSequencia);
-            Integer seqInt = null;
+            Integer seqInt;
 
             if (seqConf == null || seqConf.isBlank()) {
                 seqInt = count + 1;
@@ -178,7 +169,6 @@ public class ConferenciaWorkflowService {
                 try {
                     seqInt = Integer.valueOf(seqConf);
                 } catch (NumberFormatException e) {
-                    // se vier zoado, usa contador como fallback
                     seqInt = count + 1;
                     seqConf = String.valueOf(seqInt);
                 }
@@ -189,38 +179,21 @@ public class ConferenciaWorkflowService {
             String controle = readText(r, iControle);
             String qtdneg   = readText(r, iQtdneg);
 
-            log.info(
-                    "DEBUG_QTD_ORIGINAL_ROW nunota={} seqRaw='{}' seqInt={} codProd='{}' codvol='{}' controle='{}' qtdneg='{}'",
-                    nunotaOrig, seqConf, seqInt, codprod, codvol, controle, qtdneg
-            );
-
-            // guarda QTDNEG original em memória
             if (seqInt != null && qtdneg != null && !qtdneg.isBlank()) {
                 try {
                     Double qtdOriginal = Double.valueOf(qtdneg);
                     mapaQtdOriginal.put(seqInt, qtdOriginal);
-
-                    log.info(
-                            "DEBUG_QTD_ORIGINAL_STORE_ITEM nunota={} seq={} qtdOriginal={} (qtdnegBruto='{}')",
-                            nunotaOrig, seqInt, qtdOriginal, qtdneg
-                    );
                 } catch (NumberFormatException e) {
                     log.warn(
                             "Não consegui converter QTDNEG para Double. nunota={}, seq={}, qtdneg='{}'",
                             nunotaOrig, seqInt, qtdneg
                     );
                 }
-            } else {
-                log.info(
-                        "DEBUG_QTD_ORIGINAL_SKIP_ITEM nunota={} seqInt={} qtdneg='{}' (não armazenado)",
-                        nunotaOrig, seqInt, qtdneg
-                );
             }
 
             ObjectNode rowNode = dataRowArray.addObject();
             ObjectNode local = rowNode.putObject("localFields");
 
-            // IMPORTANTE: aqui você continua preenchendo QTDCONFVOLPAD com a QTDNEG original
             local.putObject("NUCONF").put("$", nuconf.toString());
             local.putObject("SEQCONF").put("$", seqConf);
             local.putObject("CODBARRA").put("$", "");
@@ -234,7 +207,6 @@ public class ConferenciaWorkflowService {
             count++;
         }
 
-        // salva o mapa em memória para essa NUNOTA
         if (!mapaQtdOriginal.isEmpty()) {
             qtdOriginalPorNota.put(nunotaOrig, mapaQtdOriginal);
             log.info("DEBUG_QTD_ORIGINAL_STORE_MAP nunota={} -> {}", nunotaOrig, mapaQtdOriginal);
@@ -303,7 +275,7 @@ public class ConferenciaWorkflowService {
         Long codUsuario = req.codUsuario();
         List<ItemFinalizacaoDTO> itens = req.itens();
 
-        // LOG ESCANDALOSO DA REQ QUE VEM DO APP
+        // LOG ÚNICO DA REQ QUE VEM DO APP
         try {
             log.info(
                     "\n################## DEBUG_FINALIZAR_DIVERGENTE_REQ ##################\n" +
@@ -317,18 +289,27 @@ public class ConferenciaWorkflowService {
             log.warn("Não consegui serializar FinalizarDivergenteRequest para log", e);
         }
 
-        log.info("DEBUG_DIVERGENTE_INICIO nuconf={} nunotaOrig={} codUsuario={} totalItens={}",
-                nuconf, nunotaOrig, codUsuario, itens != null ? itens.size() : 0);
+        // LOG ÚNICO RESUMINDO TODAS AS QTD_CONFERIDA
+        if (itens != null && !itens.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n################## DEBUG_QTD_CONFERIDA_ITENS ##################\n");
+            sb.append("nunotaOrig=").append(nunotaOrig)
+                    .append(" nuconf=").append(nuconf)
+                    .append(" totalItens=").append(itens.size()).append("\n");
 
-        if (itens != null) {
             for (ItemFinalizacaoDTO it : itens) {
-                log.info(
-                        "################## AQUI_QTD_CONFERIDA_DO_APP ##################\n" +
-                                "nunotaOrig={} nuconf={} seq={} codProd={} qtdConferida={}\n" +
-                                "###############################################################",
-                        nunotaOrig, nuconf, it.sequencia(), it.codProd(), it.qtdConferida()
-                );
+                sb.append(String.format(
+                        "SEQ=%d CODPROD=%d QTD_CONFERIDA=%s%n",
+                        it.sequencia(),
+                        it.codProd(),
+                        String.valueOf(it.qtdConferida())
+                ));
             }
+            sb.append("###############################################################");
+            log.info(sb.toString());
+        } else {
+            log.info("DEBUG_QTD_CONFERIDA_ITENS nunotaOrig={} nuconf={} -> sem itens na requisição",
+                    nunotaOrig, nuconf);
         }
 
         if (itens == null || itens.isEmpty()) {
@@ -444,7 +425,6 @@ public class ConferenciaWorkflowService {
         ObjectNode dataRow = dataSet.putObject("dataRow");
         ObjectNode localFields = dataRow.putObject("localFields");
 
-        // aqui você havia deixado STATUS = 'F'; mantive igual
         localFields.putObject("STATUS").put("$", "F");
         localFields.putObject("DHFINCONF").put("$", agora);
         localFields.putObject("CODUSUCONF").put("$", codUsuario.toString());
@@ -486,7 +466,7 @@ public class ConferenciaWorkflowService {
 
         if (nunota == null || sequencia == null) {
             log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_NULL_KEYS nunota={} seq={} -> retornando fallback={}",
+                    "DEBUG_QTD_ORIGINAL_GET_NULL_KEYS nunota={} seq={} -> fallback={}",
                     nunota, sequencia, fallbackQtdAtual
             );
             return fallbackQtdAtual;
@@ -496,7 +476,7 @@ public class ConferenciaWorkflowService {
 
         if (mapa == null) {
             log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_MAP_NULL nunota={} seq={} -> mapa nulo, retornando fallback={}",
+                    "DEBUG_QTD_ORIGINAL_GET_MAP_NULL nunota={} seq={} -> fallback={}",
                     nunota, sequencia, fallbackQtdAtual
             );
             return fallbackQtdAtual;
@@ -506,15 +486,15 @@ public class ConferenciaWorkflowService {
 
         if (qtdOriginal == null) {
             log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_NOT_FOUND nunota={} seq={} mapa={} -> sem entrada, retornando fallback={}",
+                    "DEBUG_QTD_ORIGINAL_GET_NOT_FOUND nunota={} seq={} mapa={} -> fallback={}",
                     nunota, sequencia, mapa, fallbackQtdAtual
             );
             return fallbackQtdAtual;
         }
 
         log.info(
-                "DEBUG_QTD_ORIGINAL_GET_FOUND nunota={} seq={} qtdOriginal={} mapa={}",
-                nunota, sequencia, qtdOriginal, mapa
+                "DEBUG_QTD_ORIGINAL_GET_FOUND nunota={} seq={} qtdOriginal={}",
+                nunota, sequencia, qtdOriginal
         );
 
         return qtdOriginal;
