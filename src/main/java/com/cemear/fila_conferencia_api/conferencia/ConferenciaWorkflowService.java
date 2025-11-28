@@ -26,8 +26,6 @@ public class ConferenciaWorkflowService {
 
     private final SankhyaGatewayClient gatewayClient;
     private final ObjectMapper objectMapper;
-
-    // Service que persiste snapshot de itens no Mongo
     private final ConferenciaItemMongoService conferenciaItemMongoService;
 
     private static final DateTimeFormatter FMT =
@@ -71,7 +69,6 @@ public class ConferenciaWorkflowService {
     // ATUALIZAR NUCONF NO CABEÇALHO DA NOTA (TGFCAB)
     // ---------------------------------
     public void atualizarNuconfCabecalhoNota(Long nunotaOrig, Long nuconf) {
-
         ObjectNode root = objectMapper.createObjectNode();
         ObjectNode requestBody = root.putObject("requestBody");
         ObjectNode dataSet = requestBody.putObject("dataSet");
@@ -88,7 +85,6 @@ public class ConferenciaWorkflowService {
         key.putObject("NUNOTA").put("$", nunotaOrig.toString());
 
         ObjectNode entity = dataSet.putObject("entity");
-        // no Sankhya está assim mesmo: "fieldset"
         ObjectNode fieldSet = entity.putObject("fieldset");
         fieldSet.put("list", "NUNOTA,NUCONFATUAL");
 
@@ -100,11 +96,9 @@ public class ConferenciaWorkflowService {
     // + REGISTRAR QTDNEG ORIGINAL NO MONGO
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
-
         log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
                 nunotaOrig, nuconf);
 
-        // 1) Busca itens do pedido na TGFITE via DbExplorer
         String sql = """
             SELECT
                 i.SEQUENCIA,
@@ -121,7 +115,6 @@ public class ConferenciaWorkflowService {
         log.info("DEBUG_SQL_TGFITE nunotaOrig={} SQL:\n{}", nunotaOrig, sql);
 
         JsonNode root = gatewayClient.executeDbExplorer(sql);
-
         JsonNode responseBody = root.path("responseBody");
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
         JsonNode rowsNode = responseBody.path("rows");
@@ -196,7 +189,7 @@ public class ConferenciaWorkflowService {
                 }
             }
 
-            // >>> REGISTRA SNAPSHOT ORIGINAL NO MONGO (se ainda não existir)
+            // REGISTRA SNAPSHOT ORIGINAL NO MONGO
             if (qtdOriginal != null) {
                 try {
                     conferenciaItemMongoService.registrarQtdOriginal(
@@ -204,7 +197,7 @@ public class ConferenciaWorkflowService {
                             seqInt,
                             codProdInt,
                             qtdOriginal,
-                            null // aqui ainda não temos usuário do conferente
+                            null
                     );
                 } catch (Exception e) {
                     log.warn("Falha ao registrar qtdOriginal no Mongo. nunota={} seq={}",
@@ -221,8 +214,8 @@ public class ConferenciaWorkflowService {
             local.putObject("CODPROD").put("$", codprodStr);
             local.putObject("CODVOL").put("$", codvol);
             local.putObject("CONTROLE").put("$", controle == null ? "" : controle);
-            local.putObject("QTDCONFVOLPAD").put("$", qtdneg); // QTD ESPERADA (original)
-            local.putObject("QTDCONF").put("$", qtdneg);       // inicia igual à esperada
+            local.putObject("QTDCONFVOLPAD").put("$", qtdneg);
+            local.putObject("QTDCONF").put("$", qtdneg);
             local.putObject("COPIA").put("$", "N");
 
             count++;
@@ -283,8 +276,7 @@ public class ConferenciaWorkflowService {
     // Atualiza TGFCOI2, TGFITE e Mongo
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
-
-        Long nuconf     = req.nuconf();
+        Long nuconf = req.nuconf();
         Long nunotaOrig = req.nunotaOrig();
         Long codUsuario = req.codUsuario();
         List<ItemFinalizacaoDTO> itens = req.itens();
@@ -294,26 +286,28 @@ public class ConferenciaWorkflowService {
             log.info(
                     "\n################## DEBUG_FINALIZAR_DIVERGENTE_REQ ##################\n" +
                             "nuconf={} nunotaOrig={} codUsuario={}\n" +
-                            "PAYLOAD_COMPLETO_DO_APP:\n{}\n" +
+                            "Total de itens: {}\n" +
+                            "PAYLOAD_COMPLETO:\n{}\n" +
                             "###################################################################",
                     nuconf, nunotaOrig, codUsuario,
+                    itens != null ? itens.size() : 0,
                     objectMapper.writeValueAsString(req)
             );
         } catch (Exception e) {
             log.warn("Não consegui serializar FinalizarDivergenteRequest para log", e);
         }
 
-        // LOG RESUMO QTD_CONFERIDA
+        // LOG DETALHADO DAS QTD_CONFERIDAS
         if (itens != null && !itens.isEmpty()) {
             StringBuilder sb = new StringBuilder();
-            sb.append("\n################## DEBUG_QTD_CONFERIDA_ITENS ##################\n");
+            sb.append("\n################## DEBUG_QTD_CONFERIDA_CHEGANDO ##################\n");
             sb.append("nunotaOrig=").append(nunotaOrig)
                     .append(" nuconf=").append(nuconf)
                     .append(" totalItens=").append(itens.size()).append("\n");
 
             for (ItemFinalizacaoDTO it : itens) {
                 sb.append(String.format(
-                        "SEQ=%d CODPROD=%d QTD_CONFERIDA=%s%n",
+                        "SEQ=%d CODPROD=%d QTD_CONFERIDA_RECEBIDA=%s%n",
                         it.sequencia(),
                         it.codProd(),
                         String.valueOf(it.qtdConferida())
@@ -322,12 +316,11 @@ public class ConferenciaWorkflowService {
             sb.append("###############################################################");
             log.info(sb.toString());
         } else {
-            log.info("DEBUG_QTD_CONFERIDA_ITENS nunotaOrig={} nuconf={} -> sem itens na requisição",
-                    nunotaOrig, nuconf);
+            log.warn("DEBUG: Requisição de finalização divergente sem itens. nuconf={}, nunotaOrig={}",
+                    nuconf, nunotaOrig);
         }
 
         if (itens != null && !itens.isEmpty()) {
-
             // 1) Atualizar TGFCOI2 (DetalhesConferencia) com QTDCONF = qtdConferida
             atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
 
@@ -336,9 +329,17 @@ public class ConferenciaWorkflowService {
 
             // 3) Atualizar Mongo com qtdConferida / qtdAjustada
             for (ItemFinalizacaoDTO item : itens) {
-                if (item.qtdConferida() == null) continue;
+                if (item.qtdConferida() == null) {
+                    log.warn("DEBUG: qtdConferida é null para item seq={} codProd={}",
+                            item.sequencia(), item.codProd());
+                    continue;
+                }
 
                 try {
+                    log.info("📝 SALVANDO_NO_MONGO - nunota={} seq={} qtdConferida={}",
+                            nunotaOrig, item.sequencia(), item.qtdConferida());
+
+                    // Registrar quantidade conferida
                     conferenciaItemMongoService.registrarQtdConferida(
                             nunotaOrig,
                             item.sequencia(),
@@ -346,15 +347,19 @@ public class ConferenciaWorkflowService {
                             codUsuario != null ? codUsuario.intValue() : null
                     );
 
-                    // neste fluxo qtdAjustada = qtdConferida
+                    // Neste fluxo qtdAjustada = qtdConferida
                     conferenciaItemMongoService.registrarQtdAjustada(
                             nunotaOrig,
                             item.sequencia(),
                             item.qtdConferida(),
                             codUsuario != null ? codUsuario.intValue() : null
                     );
+
+                    log.info("✅ MONGO_SALVO - nunota={} seq={}",
+                            nunotaOrig, item.sequencia());
+
                 } catch (Exception e) {
-                    log.warn("Falha ao atualizar quantidades finais no Mongo. nunota={} seq={}",
+                    log.error("❌ ERRO_AO_SALVAR_MONGO - nunota={} seq={}",
                             nunotaOrig, item.sequencia(), e);
                 }
             }
@@ -382,7 +387,10 @@ public class ConferenciaWorkflowService {
         ArrayNode dataRowArray = dataSet.putArray("dataRow");
 
         for (ItemFinalizacaoDTO item : itens) {
-            if (item.qtdConferida() == null) continue;
+            if (item.qtdConferida() == null) {
+                log.warn("DEBUG: qtdConferida null no TGFCOI2 - seq={}", item.sequencia());
+                continue;
+            }
 
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
@@ -400,13 +408,15 @@ public class ConferenciaWorkflowService {
         fieldSet.put("list", "NUCONF,SEQCONF,QTDCONF");
 
         log.info(
-                "\n################## DEBUG_DIVERGENTE_UPDATE_TGFCOI2 ##################\n" +
-                        "nuconf={} PAYLOAD_ENVIADO_PARA_TGFCOI2:\n{}\n" +
-                        "#################################################################",
-                nuconf, root.toPrettyString()
+                "\n################## DEBUG_UPDATE_TGFCOI2 ##################\n" +
+                        "nuconf={} Itens a atualizar: {}\n" +
+                        "Payload:\n{}\n" +
+                        "#####################################################",
+                nuconf, dataRowArray.size(), root.toPrettyString()
         );
 
-        gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
+        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
+        log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
     // atualiza TGFITE.QTDNEG = qtdConferida
@@ -418,13 +428,16 @@ public class ConferenciaWorkflowService {
         ObjectNode requestBody = root.putObject("requestBody");
         ObjectNode dataSet = requestBody.putObject("dataSet");
 
-        dataSet.put("rootEntity", "ItemNota"); // entidade padrão de item (TGFITE)
+        dataSet.put("rootEntity", "ItemNota");
         dataSet.put("includePresentationFields", "S");
 
         ArrayNode dataRowArray = dataSet.putArray("dataRow");
 
         for (ItemFinalizacaoDTO item : itens) {
-            if (item.qtdConferida() == null) continue;
+            if (item.qtdConferida() == null) {
+                log.warn("DEBUG: qtdConferida null no TGFITE - seq={}", item.sequencia());
+                continue;
+            }
 
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
@@ -442,13 +455,15 @@ public class ConferenciaWorkflowService {
         fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG");
 
         log.info(
-                "\n################## DEBUG_DIVERGENTE_UPDATE_TGFITE ##################\n" +
-                        "nunotaOrig={} PAYLOAD_ENVIADO_PARA_TGFITE:\n{}\n" +
-                        "################################################################",
-                nunotaOrig, root.toPrettyString()
+                "\n################## DEBUG_UPDATE_TGFITE ##################\n" +
+                        "nunotaOrig={} Itens a atualizar: {}\n" +
+                        "Payload:\n{}\n" +
+                        "###################################################",
+                nunotaOrig, dataRowArray.size(), root.toPrettyString()
         );
 
-        gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
+        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
+        log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
     // finaliza cabeçalho com STATUS = F
@@ -479,9 +494,9 @@ public class ConferenciaWorkflowService {
         );
 
         log.info(
-                "\n################## DEBUG_DIVERGENTE_FINALIZA_CAB ##################\n" +
+                "\n################## DEBUG_FINALIZA_CABECALHO ##################\n" +
                         "nuconf={} PAYLOAD_FINALIZA_CABECALHO:\n{}\n" +
-                        "################################################################",
+                        "##########################################################",
                 nuconf, root.toPrettyString()
         );
 
@@ -492,13 +507,7 @@ public class ConferenciaWorkflowService {
     }
 
     // ----------------- API para o PedidoConferenciaService -----------------
-
-    /**
-     * Retorna a quantidade original (antes de cortes) para um item da nota.
-     * Se não encontrar no Mongo, devolve o fallback (que normalmente é a QTD_ATUAL).
-     */
     public Double getQtdOriginalItem(Long nunota, Integer sequencia, Double fallbackQtdAtual) {
-
         log.info(
                 "DEBUG_QTD_ORIGINAL_GET_IN nunota={} seq={} fallbackQtdAtual={}",
                 nunota, sequencia, fallbackQtdAtual
@@ -530,7 +539,6 @@ public class ConferenciaWorkflowService {
     }
 
     // ----------------- HELPERS -----------------
-
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
         if (fieldsMetadata != null && fieldsMetadata.isArray()) {
