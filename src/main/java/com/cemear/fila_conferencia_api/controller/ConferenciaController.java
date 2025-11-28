@@ -162,7 +162,7 @@ public class ConferenciaController {
 
         return ResponseEntity.ok(result);
     }
-    
+
 
     // 6) Health check simples
     @GetMapping("/health")
