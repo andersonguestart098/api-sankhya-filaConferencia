@@ -124,10 +124,9 @@ public class ConferenciaController {
         return ResponseEntity.ok().build();
     }
 
-    // 4) Finaliza conferência divergente (STATUS = 'D')
+    // 4) Finaliza conferência divergente
     @PostMapping("/finalizar-divergente")
     public JsonNode finalizarDivergente(@RequestBody FinalizarDivergenteRequest req) {
         return conferenciaWorkflowService.finalizarConferenciaDivergente(req);
     }
-
 }
