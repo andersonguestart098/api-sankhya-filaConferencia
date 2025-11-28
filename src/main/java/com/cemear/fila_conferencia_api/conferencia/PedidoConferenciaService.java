@@ -19,9 +19,10 @@ import java.util.List;
 public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
+    private final ConferenciaWorkflowService conferenciaWorkflowService; // 👈 para ler qtdOriginal
 
     // Template com PLACEHOLDERS para filtros + paginação
-    // Agora incluindo CODVEND + NOME_VENDEDOR (TGFVEN.APELIDO)
+    // Inclui CODVEND + NOME_VENDEDOR e campos de conferência
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
     SELECT *
     FROM (
@@ -32,13 +33,22 @@ public class PedidoConferenciaService {
             X.STATUS_CONFERENCIA,
             CAB.CODVEND,
             VEND.APELIDO AS NOME_VENDEDOR,
+
             ITE.SEQUENCIA,
             ITE.CODPROD,
             PRO.DESCRPROD AS DESCRICAO,
             ITE.CODVOL                       AS UNIDADE,
-            ITE.QTDNEG,
+
+            -- quantidade atual da nota (TGFITE já “cortada”)
+            ITE.QTDNEG                       AS QTD_ATUAL,
+
+            -- quantidades da conferência (TGFCOI2)
+            COI.QTDCONFVOLPAD                AS QTD_ESPERADA,
+            COI.QTDCONF                      AS QTD_CONFERIDA,
+
             ITE.VLRUNIT,
             ITE.VLRTOT,
+
             ROW_NUMBER() OVER (
                 ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
             ) AS RN
@@ -61,6 +71,12 @@ public class PedidoConferenciaService {
             ON PRO.CODPROD = ITE.CODPROD
         LEFT JOIN TGFVEN VEND
             ON VEND.CODVEND = CAB.CODVEND
+
+        -- junta com os itens da conferência (TGFCOI2)
+        LEFT JOIN TGFCOI2 COI
+            ON COI.NUCONF  = CAB.NUCONFATUAL   -- nuconf atual da nota
+           AND COI.SEQCONF = ITE.SEQUENCIA     -- mesmo item
+
         WHERE X.STATUS_CONFERENCIA IN (
             'A', 'AC', 'AL', 'C',
             'D', 'F',
@@ -73,7 +89,7 @@ public class PedidoConferenciaService {
     ORDER BY RN
     """;
 
-    // opcional: método default sem filtros (se usar em outro lugar)
+    // método default sem filtros
     public List<PedidoConferenciaDto> listarPendentes() {
         return listarPendentesPaginado(0, 50, null, null, null);
     }
@@ -116,7 +132,7 @@ public class PedidoConferenciaService {
             filtroStatusSql = " AND X.STATUS_CONFERENCIA = '" + status.trim() + "'";
         }
 
-        // monta SQL final (4 argumentos: %s, %s, %d, %d)
+        // monta SQL final
         String sql = String.format(
                 SQL_PEDIDOS_PAGINADO_TEMPLATE,
                 filtroDataSql,
@@ -125,7 +141,18 @@ public class PedidoConferenciaService {
                 fim
         );
 
+        // 🔥 LOG ESCANDALOSO DO SQL
+        log.info("\n\n================= DEBUG_PEDIDOS_CONF =================");
+        log.info("page={}, pageSize={}, status={}, dataIni={}, dataFim={}",
+                page, pageSize, status, dataIni, dataFim);
+        log.info("SQL GERADO:\n{}\n======================================================\n", sql);
+
         JsonNode root = gatewayClient.executeDbExplorer(sql);
+
+        // 🔥 LOG ESCANDALOSO DA RESPOSTA BRUTA
+        log.info("########## DEBUG_PEDIDOS_CONF - RESPOSTA DBEXPLORER ##########");
+        log.info("Resposta completa do DbExplorer:\n{}", root.toPrettyString());
+        log.info("################################################################");
 
         JsonNode responseBody = root.path("responseBody");
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
@@ -137,8 +164,10 @@ public class PedidoConferenciaService {
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
+        log.info("DEBUG_PEDIDOS_CONF: total de linhas retornadas: {}", rows.size());
 
         List<String> cols = extractColumns(fieldsMetadata);
+        log.info("DEBUG_PEDIDOS_CONF: colunas retornadas: {}", cols);
 
         int iNunota        = indexOf(cols, "NUNOTA");
         int iNumNota       = indexOf(cols, "NUMNOTA");
@@ -150,7 +179,11 @@ public class PedidoConferenciaService {
         int iCodProd       = indexOf(cols, "CODPROD");
         int iDescricao     = indexOf(cols, "DESCRICAO");
         int iUnidade       = indexOf(cols, "UNIDADE");
-        int iQtdNeg        = indexOf(cols, "QTDNEG");
+
+        int iQtdAtual      = indexOf(cols, "QTD_ATUAL");
+        int iQtdEsperada   = indexOf(cols, "QTD_ESPERADA");
+        int iQtdConferida  = indexOf(cols, "QTD_CONFERIDA");
+
         int iVlrUnit       = indexOf(cols, "VLRUNIT");
         int iVlrTot        = indexOf(cols, "VLRTOT");
 
@@ -178,9 +211,23 @@ public class PedidoConferenciaService {
             Long codProd      = readLong(r, iCodProd);
             String descricao  = readText(r, iDescricao);
             String unidade    = readText(r, iUnidade);
-            Double qtdNeg     = readDouble(r, iQtdNeg);
+
+            Double qtdAtual      = readDouble(r, iQtdAtual);      // QTDNEG (cortado)
+            Double qtdEsperada   = readDouble(r, iQtdEsperada);   // QTDCONFVOLPAD
+            Double qtdConferida  = readDouble(r, iQtdConferida);  // QTDCONF
+
             Double vlrUnit    = readDouble(r, iVlrUnit);
             Double vlrTot     = readDouble(r, iVlrTot);
+
+            // 👇 Pega a quantidade ORIGINAL da memória (antes do corte)
+            Double qtdOriginal = conferenciaWorkflowService
+                    .getQtdOriginalItem(nunota, sequencia, qtdAtual);
+
+            // 🔥 LOG POR ITEM – agora mostrando qtdOriginal também
+            log.info(
+                    "DEBUG_ITEM_CONF nunota={} seq={} codProd={} | QTD_ORIGINAL={} QTD_ATUAL={} QTD_ESPERADA={} QTD_CONFERIDA={}",
+                    nunota, sequencia, codProd, qtdOriginal, qtdAtual, qtdEsperada, qtdConferida
+            );
 
             if (nunota == null || st == null) {
                 continue;
@@ -189,7 +236,6 @@ public class PedidoConferenciaService {
             // pega (ou cria) o pedido
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
-                // usando o construtor completão do DTO
                 pedido = new PedidoConferenciaDto(
                         nunota,
                         numNota,
@@ -197,7 +243,7 @@ public class PedidoConferenciaService {
                         st,
                         codVendedor,
                         nomeVend,
-                        null,   // nomeConferente (preenchido em outra lógica se quiser)
+                        null,   // nomeConferente
                         null    // avatarUrlConferente
                 );
                 pedidosMap.put(nunota, pedido);
@@ -217,19 +263,24 @@ public class PedidoConferenciaService {
                 }
             }
 
-            // adiciona item
+            // adiciona item com todas as quantidades
             pedido.addItem(new ItemConferenciaDto(
                     sequencia,
                     codProd,
                     descricao,
                     unidade,
-                    qtdNeg,
+                    qtdAtual,
+                    qtdEsperada,
+                    qtdConferida,
                     vlrUnit,
-                    vlrTot
+                    vlrTot,
+                    qtdOriginal   // 👈 novo campo no DTO
             ));
         }
 
-        return new ArrayList<>(pedidosMap.values());
+        List<PedidoConferenciaDto> listaFinal = new ArrayList<>(pedidosMap.values());
+        log.info("DEBUG_PEDIDOS_CONF: total de pedidos montados: {}", listaFinal.size());
+        return listaFinal;
     }
 
     // ---------- helpers ----------
