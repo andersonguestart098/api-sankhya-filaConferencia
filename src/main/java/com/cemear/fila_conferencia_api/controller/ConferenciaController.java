@@ -129,4 +129,5 @@ public class ConferenciaController {
     public JsonNode finalizarDivergente(@RequestBody FinalizarDivergenteRequest req) {
         return conferenciaWorkflowService.finalizarConferenciaDivergente(req);
     }
+
 }
