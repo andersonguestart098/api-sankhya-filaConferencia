@@ -3,6 +3,8 @@ package com.cemear.fila_conferencia_api.conferencia;
 
 import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest;
 import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest.ItemFinalizacaoDTO;
+import com.cemear.fila_conferencia_api.conferencia.mongo.ConferenciaItemMongoService;
+import com.cemear.fila_conferencia_api.conferencia.mongo.ItemConferenciaDoc;
 import com.cemear.fila_conferencia_api.sankhya.SankhyaGatewayClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,8 +16,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -25,16 +27,11 @@ public class ConferenciaWorkflowService {
     private final SankhyaGatewayClient gatewayClient;
     private final ObjectMapper objectMapper;
 
+    // >>> NOVO: service para guardar original/conferida/ajustada no Mongo
+    private final ConferenciaItemMongoService conferenciaItemMongoService;
+
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
-
-    /**
-     * Mapa em memória:
-     *  - chave externa: NUNOTA (nota de origem)
-     *  - chave interna: SEQUENCIA do item
-     *  - valor: QTDNEG original (antes de qualquer corte)
-     */
-    private final Map<Long, Map<Integer, Double>> qtdOriginalPorNota = new ConcurrentHashMap<>();
 
     // ---------------------------------
     // INICIAR CONFERÊNCIA (CabecalhoConferencia)
@@ -100,7 +97,7 @@ public class ConferenciaWorkflowService {
 
     // ------------------------------------------------------
     // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
-    // + GUARDAR QTDNEG ORIGINAL EM MEMÓRIA
+    // + REGISTRAR QTDNEG ORIGINAL NO MONGO
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
 
@@ -144,8 +141,6 @@ public class ConferenciaWorkflowService {
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 
-        Map<Integer, Double> mapaQtdOriginal = new HashMap<>();
-
         ObjectNode rootReq = objectMapper.createObjectNode();
         ObjectNode requestBody2 = rootReq.putObject("requestBody");
         ObjectNode dataSet = requestBody2.putObject("dataSet");
@@ -174,15 +169,25 @@ public class ConferenciaWorkflowService {
                 }
             }
 
-            String codprod  = readText(r, iCodprod);
+            String codprodStr = readText(r, iCodprod);
             String codvol   = readText(r, iCodvol);
             String controle = readText(r, iControle);
             String qtdneg   = readText(r, iQtdneg);
 
-            if (seqInt != null && qtdneg != null && !qtdneg.isBlank()) {
+            Integer codProdInt = null;
+            if (codprodStr != null && !codprodStr.isBlank()) {
                 try {
-                    Double qtdOriginal = Double.valueOf(qtdneg);
-                    mapaQtdOriginal.put(seqInt, qtdOriginal);
+                    codProdInt = Integer.valueOf(codprodStr);
+                } catch (NumberFormatException e) {
+                    log.warn("Não consegui converter CODPROD para Integer. nunota={} seq={} codprod='{}'",
+                            nunotaOrig, seqInt, codprodStr);
+                }
+            }
+
+            Double qtdOriginal = null;
+            if (qtdneg != null && !qtdneg.isBlank()) {
+                try {
+                    qtdOriginal = Double.valueOf(qtdneg);
                 } catch (NumberFormatException e) {
                     log.warn(
                             "Não consegui converter QTDNEG para Double. nunota={}, seq={}, qtdneg='{}'",
@@ -191,13 +196,24 @@ public class ConferenciaWorkflowService {
                 }
             }
 
+            // >>> REGISTRA SNAPSHOT ORIGINAL NO MONGO (se ainda não existir)
+            if (qtdOriginal != null) {
+                conferenciaItemMongoService.registrarQtdOriginal(
+                        nunotaOrig,
+                        seqInt,
+                        codProdInt,
+                        qtdOriginal,
+                        null // aqui ainda não temos usuário do conferente
+                );
+            }
+
             ObjectNode rowNode = dataRowArray.addObject();
             ObjectNode local = rowNode.putObject("localFields");
 
             local.putObject("NUCONF").put("$", nuconf.toString());
             local.putObject("SEQCONF").put("$", seqConf);
             local.putObject("CODBARRA").put("$", "");
-            local.putObject("CODPROD").put("$", codprod);
+            local.putObject("CODPROD").put("$", codprodStr);
             local.putObject("CODVOL").put("$", codvol);
             local.putObject("CONTROLE").put("$", controle == null ? "" : controle);
             local.putObject("QTDCONFVOLPAD").put("$", qtdneg); // QTD ESPERADA (original)
@@ -205,13 +221,6 @@ public class ConferenciaWorkflowService {
             local.putObject("COPIA").put("$", "N");
 
             count++;
-        }
-
-        if (!mapaQtdOriginal.isEmpty()) {
-            qtdOriginalPorNota.put(nunotaOrig, mapaQtdOriginal);
-            log.info("DEBUG_QTD_ORIGINAL_STORE_MAP nunota={} -> {}", nunotaOrig, mapaQtdOriginal);
-        } else {
-            log.info("DEBUG_QTD_ORIGINAL_STORE_MAP nunota={} - nenhum QTDNEG armazenado", nunotaOrig);
         }
 
         ObjectNode entity = dataSet.putObject("entity");
@@ -267,6 +276,7 @@ public class ConferenciaWorkflowService {
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA DIVERGENTE (STATUS = D)
     // Atualiza TGFCOI2 (DetalhesConferencia) e TGFITE(QTDNEG)
+    // + Atualiza Mongo com qtdConferida / qtdAjustada
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
 
@@ -321,9 +331,30 @@ public class ConferenciaWorkflowService {
 
             // 2) Atualizar TGFITE.QTDNEG = qtdConferida
             atualizarItensNotaComQuantidades(nunotaOrig, itens);
+
+            // 3) Atualizar Mongo com qtdConferida / qtdAjustada
+            for (ItemFinalizacaoDTO item : itens) {
+                if (item.qtdConferida() == null) continue;
+
+                // qtdConferida = o que o conferente digitou (já cortado)
+                conferenciaItemMongoService.registrarQtdConferida(
+                        nunotaOrig,
+                        item.sequencia(),
+                        item.qtdConferida(),
+                        codUsuario != null ? codUsuario.intValue() : null
+                );
+
+                // qtdAjustada = o que efetivamente ficou na nota (nesse fluxo é igual à conferida)
+                conferenciaItemMongoService.registrarQtdAjustada(
+                        nunotaOrig,
+                        item.sequencia(),
+                        item.qtdConferida(),
+                        codUsuario != null ? codUsuario.intValue() : null
+                );
+            }
         }
 
-        // 3) Finalizar cabeçalho com STATUS = D (aqui mantive F, como estava no seu código)
+        // 4) Finalizar cabeçalho com STATUS = F (como já estava)
         return finalizarCabecalhoConferenciaDivergente(nuconf, codUsuario);
     }
 
@@ -411,7 +442,7 @@ public class ConferenciaWorkflowService {
         gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
 
-    // finaliza cabeçalho com STATUS = D (mas STATUS = 'F' como estava no seu código)
+    // finaliza cabeçalho com STATUS = F
     private JsonNode finalizarCabecalhoConferenciaDivergente(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
@@ -455,7 +486,7 @@ public class ConferenciaWorkflowService {
 
     /**
      * Retorna a quantidade original (antes de cortes) para um item da nota.
-     * Se não encontrar na memória, devolve o fallback (que normalmente é a QTD_ATUAL).
+     * Se não encontrar no Mongo, devolve o fallback (que normalmente é a QTD_ATUAL).
      */
     public Double getQtdOriginalItem(Long nunota, Integer sequencia, Double fallbackQtdAtual) {
 
@@ -472,32 +503,21 @@ public class ConferenciaWorkflowService {
             return fallbackQtdAtual;
         }
 
-        Map<Integer, Double> mapa = qtdOriginalPorNota.get(nunota);
-
-        if (mapa == null) {
-            log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_MAP_NULL nunota={} seq={} -> fallback={}",
-                    nunota, sequencia, fallbackQtdAtual
-            );
-            return fallbackQtdAtual;
-        }
-
-        Double qtdOriginal = mapa.get(sequencia);
-
-        if (qtdOriginal == null) {
-            log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_NOT_FOUND nunota={} seq={} mapa={} -> fallback={}",
-                    nunota, sequencia, mapa, fallbackQtdAtual
-            );
-            return fallbackQtdAtual;
-        }
-
-        log.info(
-                "DEBUG_QTD_ORIGINAL_GET_FOUND nunota={} seq={} qtdOriginal={}",
-                nunota, sequencia, qtdOriginal
-        );
-
-        return qtdOriginal;
+        return conferenciaItemMongoService
+                .buscar(nunota, sequencia)
+                .map(ItemConferenciaDoc::getQtdOriginal)
+                .map(q -> {
+                    log.info("DEBUG_QTD_ORIGINAL_GET_FOUND nunota={} seq={} qtdOriginal={}",
+                            nunota, sequencia, q);
+                    return q;
+                })
+                .orElseGet(() -> {
+                    log.info(
+                            "DEBUG_QTD_ORIGINAL_GET_NOT_FOUND nunota={} seq={} -> fallback={}",
+                            nunota, sequencia, fallbackQtdAtual
+                    );
+                    return fallbackQtdAtual;
+                });
     }
 
     // ----------------- HELPERS -----------------
