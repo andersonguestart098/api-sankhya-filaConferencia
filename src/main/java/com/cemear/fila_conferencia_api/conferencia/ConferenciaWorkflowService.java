@@ -220,14 +220,15 @@ public class ConferenciaWorkflowService {
             ObjectNode rowNode = dataRowArray.addObject();
             ObjectNode local = rowNode.putObject("localFields");
 
+            // IMPORTANTE: aqui você continua preenchendo QTDCONFVOLPAD com a QTDNEG original
             local.putObject("NUCONF").put("$", nuconf.toString());
             local.putObject("SEQCONF").put("$", seqConf);
             local.putObject("CODBARRA").put("$", "");
             local.putObject("CODPROD").put("$", codprod);
             local.putObject("CODVOL").put("$", codvol);
             local.putObject("CONTROLE").put("$", controle == null ? "" : controle);
-            local.putObject("QTDCONFVOLPAD").put("$", qtdneg);
-            local.putObject("QTDCONF").put("$", qtdneg);
+            local.putObject("QTDCONFVOLPAD").put("$", qtdneg); // QTD ESPERADA (original)
+            local.putObject("QTDCONF").put("$", qtdneg);       // inicia igual à esperada
             local.putObject("COPIA").put("$", "N");
 
             count++;
@@ -302,14 +303,30 @@ public class ConferenciaWorkflowService {
         Long codUsuario = req.codUsuario();
         List<ItemFinalizacaoDTO> itens = req.itens();
 
+        // LOG ESCANDALOSO DA REQ QUE VEM DO APP
+        try {
+            log.info(
+                    "\n################## DEBUG_FINALIZAR_DIVERGENTE_REQ ##################\n" +
+                            "nuconf={} nunotaOrig={} codUsuario={}\n" +
+                            "PAYLOAD_COMPLETO_DO_APP:\n{}\n" +
+                            "###################################################################",
+                    nuconf, nunotaOrig, codUsuario,
+                    objectMapper.writeValueAsString(req)
+            );
+        } catch (Exception e) {
+            log.warn("Não consegui serializar FinalizarDivergenteRequest para log", e);
+        }
+
         log.info("DEBUG_DIVERGENTE_INICIO nuconf={} nunotaOrig={} codUsuario={} totalItens={}",
                 nuconf, nunotaOrig, codUsuario, itens != null ? itens.size() : 0);
 
         if (itens != null) {
             for (ItemFinalizacaoDTO it : itens) {
                 log.info(
-                        "DEBUG_DIVERGENTE_ITEM nuconf={} nunotaOrig={} seq={} codProd={} qtdConferida={}",
-                        nuconf, nunotaOrig, it.sequencia(), it.codProd(), it.qtdConferida()
+                        "################## AQUI_QTD_CONFERIDA_DO_APP ##################\n" +
+                                "nunotaOrig={} nuconf={} seq={} codProd={} qtdConferida={}\n" +
+                                "###############################################################",
+                        nunotaOrig, nuconf, it.sequencia(), it.codProd(), it.qtdConferida()
                 );
             }
         }
@@ -361,8 +378,12 @@ public class ConferenciaWorkflowService {
         ObjectNode fieldSet = entity.putObject("fieldSet");
         fieldSet.put("list", "NUCONF,SEQCONF,QTDCONF");
 
-        log.info("DEBUG_DIVERGENTE_UPDATE_TGFCOI2 nuconf={} payload:\n{}",
-                nuconf, root.toPrettyString());
+        log.info(
+                "\n################## DEBUG_DIVERGENTE_UPDATE_TGFCOI2 ##################\n" +
+                        "nuconf={} PAYLOAD_ENVIADO_PARA_TGFCOI2:\n{}\n" +
+                        "#################################################################",
+                nuconf, root.toPrettyString()
+        );
 
         gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
@@ -399,8 +420,12 @@ public class ConferenciaWorkflowService {
         ObjectNode fieldSet = entity.putObject("fieldSet");
         fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG");
 
-        log.info("DEBUG_DIVERGENTE_UPDATE_TGFITE nunotaOrig={} payload:\n{}",
-                nunotaOrig, root.toPrettyString());
+        log.info(
+                "\n################## DEBUG_DIVERGENTE_UPDATE_TGFITE ##################\n" +
+                        "nunotaOrig={} PAYLOAD_ENVIADO_PARA_TGFITE:\n{}\n" +
+                        "################################################################",
+                nunotaOrig, root.toPrettyString()
+        );
 
         gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
@@ -433,8 +458,12 @@ public class ConferenciaWorkflowService {
                 "NUCONF,NUNOTAORIG,STATUS,DHINICONF,DHFINCONF,CODUSUCONF"
         );
 
-        log.info("DEBUG_DIVERGENTE_FINALIZA_CAB nuconf={} payload:\n{}",
-                nuconf, root.toPrettyString());
+        log.info(
+                "\n################## DEBUG_DIVERGENTE_FINALIZA_CAB ##################\n" +
+                        "nuconf={} PAYLOAD_FINALIZA_CABECALHO:\n{}\n" +
+                        "################################################################",
+                nuconf, root.toPrettyString()
+        );
 
         return gatewayClient.callService(
                 "CRUDServiceProvider.saveRecord",
