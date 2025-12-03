@@ -563,14 +563,18 @@ public class ConferenciaWorkflowService {
     /**
      * Busca o VLRUNIT do item na TGFITE.
      */
-    private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Long codProd) {
+// antes
+// private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Long codProd) {
+
+// depois
+    private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Integer codProd) {
         String sql = """
-            SELECT VLRUNIT
-              FROM TGFITE
-             WHERE NUNOTA   = %d
-               AND SEQUENCIA = %d
-               AND CODPROD   = %d
-            """.formatted(nunotaOrig, sequencia, codProd);
+        SELECT VLRUNIT
+          FROM TGFITE
+         WHERE NUNOTA   = %d
+           AND SEQUENCIA = %d
+           AND CODPROD   = %d
+        """.formatted(nunotaOrig, sequencia, codProd);
 
         JsonNode root = gatewayClient.executeDbExplorer(sql);
         JsonNode rows = root.path("responseBody").path("rows");
@@ -604,6 +608,7 @@ public class ConferenciaWorkflowService {
             return 0.0;
         }
     }
+
 
     // ----------------- HELPERS -----------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
