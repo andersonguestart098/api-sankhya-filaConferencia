@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -324,7 +325,7 @@ public class ConferenciaWorkflowService {
             // 1) Atualizar TGFCOI2 (DetalhesConferencia) com QTDCONF = qtdConferida
             atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
 
-            // 2) Atualizar TGFITE.QTDNEG = qtdConferida (corte efetivo)
+            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte efetivo)
             atualizarItensNotaComQuantidades(nunotaOrig, itens);
 
             // 3) Atualizar Mongo com qtdConferida / qtdAjustada
@@ -419,7 +420,7 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // atualiza TGFITE.QTDNEG = qtdConferida
+    // atualiza TGFITE.QTDNEG e VLRTOT = VLRUNIT * qtdConferida
     private void atualizarItensNotaComQuantidades(
             Long nunotaOrig,
             List<ItemFinalizacaoDTO> itens
@@ -439,11 +440,32 @@ public class ConferenciaWorkflowService {
                 continue;
             }
 
+            Double qtdConf = item.qtdConferida();
+
+            // 1) Buscar VLRUNIT do item na TGFITE
+            double vlrUnit = buscarVlrUnitItem(nunotaOrig, item.sequencia(), item.codProd());
+
+            log.info(
+                    "[atualizarItensNotaComQuantidades] VLRUNIT encontrado. NUNOTA={}, SEQ={}, CODPROD={}, vlrUnit={}",
+                    nunotaOrig, item.sequencia(), item.codProd(), vlrUnit
+            );
+
+            // 2) Calcular novo VLRTOT
+            double novoVlrTot = vlrUnit * qtdConf;
+
+            String qtdConfStr = String.format(Locale.US, "%.4f", qtdConf);
+            String vlrTotStr = String.format(Locale.US, "%.2f", novoVlrTot);
+
+            log.info(
+                    "[atualizarItensNotaComQuantidades] Aplicando corte. NUNOTA={}, SEQ={}, CODPROD={}, novaQTDNEG={}, novoVLRTOT={}",
+                    nunotaOrig, item.sequencia(), item.codProd(), qtdConfStr, vlrTotStr
+            );
+
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
-            localFields.putObject("QTDNEG")
-                    .put("$", item.qtdConferida().toString());
+            localFields.putObject("QTDNEG").put("$", qtdConfStr);
+            localFields.putObject("VLRTOT").put("$", vlrTotStr);
 
             ObjectNode key = row.putObject("key");
             key.putObject("NUNOTA").put("$", nunotaOrig.toString());
@@ -452,7 +474,7 @@ public class ConferenciaWorkflowService {
 
         ObjectNode entity = dataSet.putObject("entity");
         ObjectNode fieldSet = entity.putObject("fieldSet");
-        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG");
+        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT");
 
         log.info(
                 "\n################## DEBUG_UPDATE_TGFITE ##################\n" +
@@ -536,6 +558,51 @@ public class ConferenciaWorkflowService {
                     );
                     return fallbackQtdAtual;
                 });
+    }
+
+    /**
+     * Busca o VLRUNIT do item na TGFITE.
+     */
+    private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Long codProd) {
+        String sql = """
+            SELECT VLRUNIT
+              FROM TGFITE
+             WHERE NUNOTA   = %d
+               AND SEQUENCIA = %d
+               AND CODPROD   = %d
+            """.formatted(nunotaOrig, sequencia, codProd);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+        JsonNode rows = root.path("responseBody").path("rows");
+        JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
+
+        if (!rows.isArray() || rows.size() == 0) {
+            log.warn("[buscarVlrUnitItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
+                    nunotaOrig, sequencia, codProd);
+            return 0.0;
+        }
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        int idxVlrUnit = indexOf(cols, "VLRUNIT");
+        if (idxVlrUnit < 0) {
+            log.warn("[buscarVlrUnitItem] Coluna VLRUNIT não encontrada no metadata. NUNOTA={}, SEQ={}, CODPROD={}",
+                    nunotaOrig, sequencia, codProd);
+            return 0.0;
+        }
+
+        JsonNode firstRow = rows.get(0);
+        String vlrUnitStr = readText(firstRow, idxVlrUnit);
+        if (vlrUnitStr == null || vlrUnitStr.isBlank()) {
+            return 0.0;
+        }
+
+        try {
+            return Double.parseDouble(vlrUnitStr);
+        } catch (NumberFormatException e) {
+            log.error("[buscarVlrUnitItem] Erro ao converter VLRUNIT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    vlrUnitStr, nunotaOrig, sequencia, codProd, e);
+            return 0.0;
+        }
     }
 
     // ----------------- HELPERS -----------------
