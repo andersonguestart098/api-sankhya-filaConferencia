@@ -23,71 +23,70 @@ public class PedidoConferenciaService {
 
     // Template com PLACEHOLDERS para filtros + paginação
     // Inclui CODVEND + NOME_VENDEDOR e campos de conferência
+    // Agora pagina por NUNOTA (cabeçalho), não por linha de item
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
-    SELECT *
+    SELECT
+        X.NUNOTA,
+        CAB.NUMNOTA,
+        PAR.NOMEPARC,
+        X.STATUS_CONFERENCIA,
+        CAB.CODVEND,
+        VEND.APELIDO AS NOME_VENDEDOR,
+
+        ITE.SEQUENCIA,
+        ITE.CODPROD,
+        PRO.DESCRPROD            AS DESCRICAO,
+        ITE.CODVOL               AS UNIDADE,
+
+        -- quantidade atual da nota (TGFITE já “cortada”)
+        ITE.QTDNEG               AS QTD_ATUAL,
+
+        -- quantidades da conferência (TGFCOI2)
+        COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
+        COI.QTDCONF              AS QTD_CONFERIDA,
+
+        ITE.VLRUNIT,
+        ITE.VLRTOT
     FROM (
         SELECT
-            X.NUNOTA,
-            CAB.NUMNOTA,
-            PAR.NOMEPARC,
-            X.STATUS_CONFERENCIA,
-            CAB.CODVEND,
-            VEND.APELIDO AS NOME_VENDEDOR,
-
-            ITE.SEQUENCIA,
-            ITE.CODPROD,
-            PRO.DESCRPROD AS DESCRICAO,
-            ITE.CODVOL                       AS UNIDADE,
-
-            -- quantidade atual da nota (TGFITE já “cortada”)
-            ITE.QTDNEG                       AS QTD_ATUAL,
-
-            -- quantidades da conferência (TGFCOI2)
-            COI.QTDCONFVOLPAD                AS QTD_ESPERADA,
-            COI.QTDCONF                      AS QTD_CONFERIDA,
-
-            ITE.VLRUNIT,
-            ITE.VLRTOT,
-
+            CAB.NUNOTA,
+            CAB.CODPARC,
+            SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
             ROW_NUMBER() OVER (
-                ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
-            ) AS RN
-        FROM (
-            SELECT
-                CAB.NUNOTA,
-                CAB.CODPARC,
-                SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
-            FROM TGFCAB CAB
-            WHERE 1 = 1
-              %s   -- Filtro de data
-        ) X
-        JOIN TGFCAB CAB
-            ON CAB.NUNOTA = X.NUNOTA
-        JOIN TGFPAR PAR
-            ON PAR.CODPARC = CAB.CODPARC
-        JOIN TGFITE ITE
-            ON ITE.NUNOTA = X.NUNOTA
-        JOIN TGFPRO PRO
-            ON PRO.CODPROD = ITE.CODPROD
-        LEFT JOIN TGFVEN VEND
-            ON VEND.CODVEND = CAB.CODVEND
+                ORDER BY CAB.NUNOTA DESC
+            ) AS RN              -- 👈 paginação POR NUNOTA
+        FROM TGFCAB CAB
+        WHERE 1 = 1
+          %s   -- Filtro de data
+    ) X
+    JOIN TGFCAB CAB
+        ON CAB.NUNOTA = X.NUNOTA
+    JOIN TGFPAR PAR
+        ON PAR.CODPARC = CAB.CODPARC
+    JOIN TGFITE ITE
+        ON ITE.NUNOTA = X.NUNOTA
+    JOIN TGFPRO PRO
+        ON PRO.CODPROD = ITE.CODPROD
+    LEFT JOIN TGFVEN VEND
+        ON VEND.CODVEND = CAB.CODVEND
 
-        -- junta com os itens da conferência (TGFCOI2)
-        LEFT JOIN TGFCOI2 COI
-            ON COI.NUCONF  = CAB.NUCONFATUAL   -- nuconf atual da nota
-           AND COI.SEQCONF = ITE.SEQUENCIA     -- mesmo item
+    -- junta com os itens da conferência (TGFCOI2)
+    LEFT JOIN TGFCOI2 COI
+        ON COI.NUCONF  = CAB.NUCONFATUAL   -- nuconf atual da nota
+       AND COI.SEQCONF = ITE.SEQUENCIA     -- mesmo item
 
-        WHERE X.STATUS_CONFERENCIA IN (
-            'A', 'AC', 'AL', 'C',
-            'D', 'F',
-            'R', 'RA', 'RD', 'RF',
-            'Z'
-        )
-          %s   -- Filtro de status
+    WHERE X.STATUS_CONFERENCIA IN (
+        'A', 'AC', 'AL', 'C',
+        'D', 'F',
+        'R', 'RA', 'RD', 'RF',
+        'Z'
     )
-    WHERE RN BETWEEN %d AND %d
-    ORDER BY RN
+      %s   -- Filtro de status
+      AND X.RN BETWEEN %d AND %d   -- 👈 paginação por nota aqui
+
+    ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
     """;
+
 
     // método default sem filtros
     public List<PedidoConferenciaDto> listarPendentes() {
