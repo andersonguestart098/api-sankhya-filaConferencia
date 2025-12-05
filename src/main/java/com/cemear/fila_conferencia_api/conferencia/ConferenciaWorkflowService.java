@@ -423,7 +423,10 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // atualiza TGFITE.QTDNEG e VLRTOT considerando PERCDESC
+    // ---------------------------------------------
+    // atualiza TGFITE.QTDNEG, VLRTOT, VLRUNIT, VLRDESC
+    // usando VLRUNIT, PERCDESC, VLRREPREDSEMDESC
+    // ---------------------------------------------
     private void atualizarItensNotaComQuantidades(
             Long nunotaOrig,
             List<ItemFinalizacaoDTO> itens
@@ -445,47 +448,112 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            // Busca VLRUNIT + PERCDESC do item
+            // Busca VLRUNIT + PERCDESC + VLRREPREDSEMDESC + VLRDESC do item
             PrecoDesconto preco = buscarPrecoEDescontoItem(
                     nunotaOrig,
                     item.sequencia(),
                     item.codProd()
             );
 
-            double vlrUnit  = preco.vlrUnit();
-            double percDesc = preco.percDesc();
+            double vlrUnitAtual      = preco.vlrUnit();
+            double percDesc          = preco.percDesc();
+            double vlrRepSemDescUnit = preco.vlrRepSemDesc();
+            double vlrDescOriginal   = preco.vlrDesc();
 
-            // se não achar, evita bagunça
-            if (vlrUnit == 0.0) {
+            if (vlrUnitAtual == 0.0 && vlrRepSemDescUnit == 0.0) {
                 log.warn(
-                        "[atualizarItensNotaComQuantidades] VLRUNIT=0. Pulando item. NUNOTA={}, SEQ={}, CODPROD={}",
+                        "[atualizarItensNotaComQuantidades] Preços zerados. Pulando item. NUNOTA={}, SEQ={}, CODPROD={}",
                         nunotaOrig, item.sequencia(), item.codProd()
                 );
                 continue;
             }
 
-            double valorBruto = vlrUnit * qtdConf;
-            double fatorDesc  = percDesc / 100.0;
-            double valorDesc  = valorBruto * fatorDesc;
-            double novoVlrTot = valorBruto - valorDesc;
+            // --------- NOVA QUANTIDADE + DESCONTO -----------
+            double valorBrutoSemDesc;  // total sem desconto
+            double valorDescNovo;      // novo VLRDESC
+            double novoVlrTot;         // novo VLRTOT (líquido)
+            double novoVlrUnit;        // novo VLRUNIT (líquido)
 
-            String qtdConfStr = String.format(Locale.US, "%.4f", qtdConf);
-            String vlrTotStr  = String.format(Locale.US, "%.2f", novoVlrTot);
+            double fatorDesc = percDesc / 100.0;
 
-            log.info(
-                    "[atualizarItensNotaComQuantidades] Corte com desconto. NUNOTA={}, SEQ={}, CODPROD={}, " +
-                            "qtdConf={}, vlrUnit={}, percDesc={}, valorBruto={}, valorDesc={}, novoVLRTOT={}",
-                    nunotaOrig, item.sequencia(), item.codProd(),
-                    qtdConfStr, vlrUnit, percDesc, valorBruto, valorDesc, novoVlrTot
-            );
+            if (vlrRepSemDescUnit > 0.0 && percDesc > 0.0) {
+                // Cenário ideal: temos o valor cheio por unidade e o % de desc
+                valorBrutoSemDesc = vlrRepSemDescUnit * qtdConf;
+                valorBrutoSemDesc = round(valorBrutoSemDesc, 2);
+
+                valorDescNovo = valorBrutoSemDesc * fatorDesc;
+                valorDescNovo = round(valorDescNovo, 2);
+
+                novoVlrTot = valorBrutoSemDesc - valorDescNovo;
+                novoVlrTot = round(novoVlrTot, 2);
+
+                if (qtdConf != 0) {
+                    novoVlrUnit = novoVlrTot / qtdConf;
+                } else {
+                    novoVlrUnit = vlrUnitAtual;
+                }
+                novoVlrUnit = round(novoVlrUnit, 6);
+
+                log.info(
+                        "[atualizarItensNotaComQuantidades] (REPSEM + PERCDESC) NUNOTA={}, SEQ={}, CODPROD={}, " +
+                                "qtdConf={}, vlrRepSemDescUnit={}, percDesc={}, brutoSemDesc={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
+                        nunotaOrig, item.sequencia(), item.codProd(),
+                        qtdConf, vlrRepSemDescUnit, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
+                );
+            } else {
+                // Fallback: usa VLRUNIT atual e PERCDESC (se houver)
+                novoVlrTot = vlrUnitAtual * qtdConf;
+                novoVlrTot = round(novoVlrTot, 2);
+
+                if (percDesc > 0.0) {
+                    // Reconstroi o bruto a partir do líquido + % desc
+                    double brutoEstimado = novoVlrTot / (1.0 - fatorDesc);
+                    brutoEstimado = round(brutoEstimado, 2);
+                    valorDescNovo = brutoEstimado - novoVlrTot;
+                    valorDescNovo = round(valorDescNovo, 2);
+                    valorBrutoSemDesc = brutoEstimado;
+                } else if (vlrDescOriginal > 0.0) {
+                    // Mantém proporção do desconto original (se quiser sofisticar, pode considerar qtd original)
+                    valorDescNovo = vlrDescOriginal; // simples, não proporcional
+                    valorDescNovo = round(valorDescNovo, 2);
+                    valorBrutoSemDesc = novoVlrTot + valorDescNovo;
+                } else {
+                    valorDescNovo = 0.0;
+                    valorBrutoSemDesc = novoVlrTot;
+                }
+
+                if (qtdConf != 0) {
+                    novoVlrUnit = novoVlrTot / qtdConf;
+                } else {
+                    novoVlrUnit = vlrUnitAtual;
+                }
+                novoVlrUnit = round(novoVlrUnit, 6);
+
+                log.info(
+                        "[atualizarItensNotaComQuantidades] (FALLBACK) NUNOTA={}, SEQ={}, CODPROD={}, " +
+                                "qtdConf={}, vlrUnitAtual={}, percDesc={}, brutoEstimado={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
+                        nunotaOrig, item.sequencia(), item.codProd(),
+                        qtdConf, vlrUnitAtual, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
+                );
+            }
+
+            String qtdConfStr  = String.format(Locale.US, "%.4f", qtdConf);
+            String vlrTotStr   = String.format(Locale.US, "%.2f", novoVlrTot);
+            String vlrUnitStr  = String.format(Locale.US, "%.6f", novoVlrUnit);
+            String vlrDescStr  = String.format(Locale.US, "%.2f", valorDescNovo);
+            String percDescStr = String.format(Locale.US, "%.4f", percDesc);
 
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
+            // QTDNEG ajustada
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
+
+            // Valores financeiros recalculados
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
-            // Se quiser forçar PERCDESC também:
-            // localFields.putObject("PERCDESC").put("$", String.format(Locale.US, "%.4f", percDesc));
+            localFields.putObject("VLRUNIT").put("$", vlrUnitStr);
+            localFields.putObject("VLRDESC").put("$", vlrDescStr);
+            localFields.putObject("PERCDESC").put("$", percDescStr);
 
             ObjectNode key = row.putObject("key");
             key.putObject("NUNOTA").put("$", nunotaOrig.toString());
@@ -494,7 +562,7 @@ public class ConferenciaWorkflowService {
 
         ObjectNode entity = dataSet.putObject("entity");
         ObjectNode fieldSet = entity.putObject("fieldSet");
-        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT");
+        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT,VLRUNIT,VLRDESC,PERCDESC");
 
         log.info(
                 "\n################## DEBUG_UPDATE_TGFITE ##################\n" +
@@ -666,17 +734,22 @@ public class ConferenciaWorkflowService {
 
     // ----------------- PREÇO + DESCONTO DO ITEM -----------------
 
-    // guarda VLRUNIT + PERCDESC do item
-    private record PrecoDesconto(double vlrUnit, double percDesc) {}
+    // guarda VLRUNIT + PERCDESC + VLRREPREDSEMDESC + VLRDESC do item
+    private record PrecoDesconto(
+            double vlrUnit,
+            double percDesc,
+            double vlrRepSemDesc,
+            double vlrDesc
+    ) {}
 
-    // Busca VLRUNIT (preço) e PERCDESC (desconto %) do item na TGFITE
+    // Busca VLRUNIT, PERCDESC, VLRREPREDSEMDESC e VLRDESC do item na TGFITE
     private PrecoDesconto buscarPrecoEDescontoItem(
             Long nunotaOrig,
             Integer sequencia,
             Integer codProd
     ) {
         String sql = """
-        SELECT VLRUNIT, PERCDESC
+        SELECT VLRUNIT, PERCDESC, VLRREPREDSEMDESC, VLRDESC
           FROM TGFITE
          WHERE NUNOTA   = %d
            AND SEQUENCIA = %d
@@ -691,20 +764,26 @@ public class ConferenciaWorkflowService {
         if (!rows.isArray() || rows.size() == 0) {
             log.warn("[buscarPrecoEDescontoItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
                     nunotaOrig, sequencia, codProd);
-            return new PrecoDesconto(0.0, 0.0);
+            return new PrecoDesconto(0.0, 0.0, 0.0, 0.0);
         }
 
         List<String> cols = extractColumns(fieldsMetadata);
-        int idxVlrUnit  = indexOf(cols, "VLRUNIT");
-        int idxPercDesc = indexOf(cols, "PERCDESC");
+        int idxVlrUnit       = indexOf(cols, "VLRUNIT");
+        int idxPercDesc      = indexOf(cols, "PERCDESC");
+        int idxVlrRepSemDesc = indexOf(cols, "VLRREPREDSEMDESC");
+        int idxVlrDesc       = indexOf(cols, "VLRDESC");
 
         JsonNode firstRow = rows.get(0);
 
-        String vlrUnitStr  = (idxVlrUnit  >= 0) ? readText(firstRow, idxVlrUnit)  : null;
-        String percDescStr = (idxPercDesc >= 0) ? readText(firstRow, idxPercDesc) : null;
+        String vlrUnitStr       = (idxVlrUnit       >= 0) ? readText(firstRow, idxVlrUnit)       : null;
+        String percDescStr      = (idxPercDesc      >= 0) ? readText(firstRow, idxPercDesc)      : null;
+        String vlrRepSemDescStr = (idxVlrRepSemDesc >= 0) ? readText(firstRow, idxVlrRepSemDesc) : null;
+        String vlrDescStr       = (idxVlrDesc       >= 0) ? readText(firstRow, idxVlrDesc)       : null;
 
         double vlrUnit = 0.0;
         double percDesc = 0.0;
+        double vlrRepSemDesc = 0.0;
+        double vlrDesc = 0.0;
 
         try {
             if (vlrUnitStr != null && !vlrUnitStr.isBlank()) {
@@ -724,12 +803,30 @@ public class ConferenciaWorkflowService {
                     percDescStr, nunotaOrig, sequencia, codProd, e);
         }
 
+        try {
+            if (vlrRepSemDescStr != null && !vlrRepSemDescStr.isBlank()) {
+                vlrRepSemDesc = Double.parseDouble(vlrRepSemDescStr);
+            }
+        } catch (NumberFormatException e) {
+            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRREPREDSEMDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    vlrRepSemDescStr, nunotaOrig, sequencia, codProd, e);
+        }
+
+        try {
+            if (vlrDescStr != null && !vlrDescStr.isBlank()) {
+                vlrDesc = Double.parseDouble(vlrDescStr);
+            }
+        } catch (NumberFormatException e) {
+            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    vlrDescStr, nunotaOrig, sequencia, codProd, e);
+        }
+
         log.info(
-                "[buscarPrecoEDescontoItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRUNIT={}, PERCDESC={}",
-                nunotaOrig, sequencia, codProd, vlrUnit, percDesc
+                "[buscarPrecoEDescontoItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRUNIT={}, PERCDESC={}, VLRREPREDSEMDESC={}, VLRDESC={}",
+                nunotaOrig, sequencia, codProd, vlrUnit, percDesc, vlrRepSemDesc, vlrDesc
         );
 
-        return new PrecoDesconto(vlrUnit, percDesc);
+        return new PrecoDesconto(vlrUnit, percDesc, vlrRepSemDesc, vlrDesc);
     }
 
     // ----------------- HELPERS -----------------
@@ -754,5 +851,11 @@ public class ConferenciaWorkflowService {
         if (idx < 0 || idx >= row.size()) return null;
         JsonNode v = row.get(idx);
         return v.isNull() ? null : v.asText(null);
+    }
+
+    private static double round(double value, int scale) {
+        if (scale < 0) return value;
+        double factor = Math.pow(10, scale);
+        return Math.round(value * factor) / factor;
     }
 }
