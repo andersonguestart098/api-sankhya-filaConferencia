@@ -274,7 +274,7 @@ public class ConferenciaWorkflowService {
 
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA DIVERGENTE
-    // Atualiza TGFCOI2, TGFITE e Mongo
+    // Atualiza TGFCOI2, TGFITE, TGFCAB e Mongo
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
@@ -325,8 +325,11 @@ public class ConferenciaWorkflowService {
             // 1) Atualizar TGFCOI2 (DetalhesConferencia) com QTDCONF = qtdConferida
             atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
 
-            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte efetivo)
+            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte efetivo, com desconto)
             atualizarItensNotaComQuantidades(nunotaOrig, itens);
+
+            // 2.1) Atualizar TGFCAB.VLRNOTA com a soma dos VLRTOT já cortados
+            atualizarCabecalhoNotaComNovoTotal(nunotaOrig);
 
             // 3) Atualizar Mongo com qtdConferida / qtdAjustada
             for (ItemFinalizacaoDTO item : itens) {
@@ -442,7 +445,7 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            // 👇 agora buscamos VLRUNIT + PERCDESC de uma vez
+            // Busca VLRUNIT + PERCDESC do item
             PrecoDesconto preco = buscarPrecoEDescontoItem(
                     nunotaOrig,
                     item.sequencia(),
@@ -481,7 +484,7 @@ public class ConferenciaWorkflowService {
 
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
-            // se quiser, pode forçar o PERCDESC também, mas em geral já está certo:
+            // Se quiser forçar PERCDESC também:
             // localFields.putObject("PERCDESC").put("$", String.format(Locale.US, "%.4f", percDesc));
 
             ObjectNode key = row.putObject("key");
@@ -503,6 +506,90 @@ public class ConferenciaWorkflowService {
 
         JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
+    }
+
+    // Recalcula o total da nota (somando VLRTOT dos itens) e atualiza TGFCAB.VLRNOTA
+    private void atualizarCabecalhoNotaComNovoTotal(Long nunotaOrig) {
+        double novoVlrNota = calcularNovoVlrNota(nunotaOrig);
+
+        String vlrNotaStr = String.format(Locale.US, "%.2f", novoVlrNota);
+
+        log.info(
+                "[atualizarCabecalhoNotaComNovoTotal] Atualizando VLRNOTA. NUNOTA={} novoVlrNota={}",
+                nunotaOrig, vlrNotaStr
+        );
+
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode requestBody = root.putObject("requestBody");
+        ObjectNode dataSet = requestBody.putObject("dataSet");
+
+        dataSet.put("rootEntity", "CabecalhoNota");
+        dataSet.put("includePresentationFields", "S");
+
+        ObjectNode dataRow = dataSet.putObject("dataRow");
+        ObjectNode localFields = dataRow.putObject("localFields");
+
+        localFields.putObject("VLRNOTA").put("$", vlrNotaStr);
+
+        ObjectNode key = dataRow.putObject("key");
+        key.putObject("NUNOTA").put("$", nunotaOrig.toString());
+
+        ObjectNode entity = dataSet.putObject("entity");
+        ObjectNode fieldSet = entity.putObject("fieldSet");
+        fieldSet.put("list", "NUNOTA,VLRNOTA");
+
+        log.info(
+                "\n################## DEBUG_UPDATE_TGFCAB_VLRNOTA ##################\n" +
+                        "nunotaOrig={} Payload:\n{}\n" +
+                        "############################################################",
+                nunotaOrig, root.toPrettyString()
+        );
+
+        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
+        log.info("✅ TGFCAB_VLRNOTA_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
+    }
+
+    // Soma o VLRTOT de todos os itens (já cortados) da nota
+    private double calcularNovoVlrNota(Long nunotaOrig) {
+        String sql = """
+        SELECT SUM(VLRTOT) AS NOVO_VLRNOTA
+          FROM TGFITE
+         WHERE NUNOTA = %d
+        """.formatted(nunotaOrig);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+        JsonNode responseBody = root.path("responseBody");
+        JsonNode rows = responseBody.path("rows");
+        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
+
+        if (!rows.isArray() || rows.size() == 0) {
+            log.warn("[calcularNovoVlrNota] Nenhum item encontrado para somar. NUNOTA={}", nunotaOrig);
+            return 0.0;
+        }
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        int idxTotal = indexOf(cols, "NOVO_VLRNOTA");
+        if (idxTotal < 0) {
+            idxTotal = 0; // fallback
+        }
+
+        JsonNode firstRow = rows.get(0);
+        String totalStr = readText(firstRow, idxTotal);
+
+        if (totalStr == null || totalStr.isBlank()) {
+            log.warn("[calcularNovoVlrNota] Total nulo/vazio. NUNOTA={}", nunotaOrig);
+            return 0.0;
+        }
+
+        try {
+            double total = Double.parseDouble(totalStr);
+            log.info("[calcularNovoVlrNota] NUNOTA={} totalItens={}", nunotaOrig, total);
+            return total;
+        } catch (NumberFormatException e) {
+            log.error("[calcularNovoVlrNota] Erro ao converter total='{}' para double. NUNOTA={}",
+                    totalStr, nunotaOrig, e);
+            return 0.0;
+        }
     }
 
     // finaliza cabeçalho com STATUS = F
@@ -577,54 +664,9 @@ public class ConferenciaWorkflowService {
                 });
     }
 
-    /**
-     * Busca o VLRUNIT do item na TGFITE.
-     */
-// antes
-// private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Long codProd) {
+    // ----------------- PREÇO + DESCONTO DO ITEM -----------------
 
-// depois
-    private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Integer codProd) {
-        String sql = """
-        SELECT VLRUNIT
-          FROM TGFITE
-         WHERE NUNOTA   = %d
-           AND SEQUENCIA = %d
-           AND CODPROD   = %d
-        """.formatted(nunotaOrig, sequencia, codProd);
-
-        JsonNode root = gatewayClient.executeDbExplorer(sql);
-        JsonNode rows = root.path("responseBody").path("rows");
-        JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
-
-        if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[buscarVlrUnitItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
-                    nunotaOrig, sequencia, codProd);
-            return 0.0;
-        }
-
-        List<String> cols = extractColumns(fieldsMetadata);
-        int idxVlrUnit = indexOf(cols, "VLRUNIT");
-        if (idxVlrUnit < 0) {
-            log.warn("[buscarVlrUnitItem] Coluna VLRUNIT não encontrada no metadata. NUNOTA={}, SEQ={}, CODPROD={}",
-                    nunotaOrig, sequencia, codProd);
-            return 0.0;
-        }
-
-        JsonNode firstRow = rows.get(0);
-        String vlrUnitStr = readText(firstRow, idxVlrUnit);
-        if (vlrUnitStr == null || vlrUnitStr.isBlank()) {
-            return 0.0;
-        }
-
-        try {
-            return Double.parseDouble(vlrUnitStr);
-        } catch (NumberFormatException e) {
-            log.error("[buscarVlrUnitItem] Erro ao converter VLRUNIT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrUnitStr, nunotaOrig, sequencia, codProd, e);
-            return 0.0;
-        }
-    }// guarda VLRUNIT + PERCDESC do item
+    // guarda VLRUNIT + PERCDESC do item
     private record PrecoDesconto(double vlrUnit, double percDesc) {}
 
     // Busca VLRUNIT (preço) e PERCDESC (desconto %) do item na TGFITE
@@ -689,10 +731,6 @@ public class ConferenciaWorkflowService {
 
         return new PrecoDesconto(vlrUnit, percDesc);
     }
-
-
-
-
 
     // ----------------- HELPERS -----------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
