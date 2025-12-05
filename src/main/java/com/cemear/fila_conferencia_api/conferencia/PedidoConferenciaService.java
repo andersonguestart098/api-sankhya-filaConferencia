@@ -90,7 +90,7 @@ public class PedidoConferenciaService {
 
     // método default sem filtros
     public List<PedidoConferenciaDto> listarPendentes() {
-        return listarPendentesPaginado(0, 50, null, null, null);
+        return listarPendentesPaginado(0, 100, null, null, null);
     }
 
     // paginação + filtros
