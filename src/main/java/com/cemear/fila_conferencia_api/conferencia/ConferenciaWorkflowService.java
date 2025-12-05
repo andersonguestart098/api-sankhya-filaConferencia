@@ -420,7 +420,7 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // atualiza TGFITE.QTDNEG e VLRTOT = VLRUNIT * qtdConferida
+    // atualiza TGFITE.QTDNEG e VLRTOT considerando PERCDESC
     private void atualizarItensNotaComQuantidades(
             Long nunotaOrig,
             List<ItemFinalizacaoDTO> itens
@@ -442,23 +442,38 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            // 1) Buscar VLRUNIT do item na TGFITE
-            double vlrUnit = buscarVlrUnitItem(nunotaOrig, item.sequencia(), item.codProd());
-
-            log.info(
-                    "[atualizarItensNotaComQuantidades] VLRUNIT encontrado. NUNOTA={}, SEQ={}, CODPROD={}, vlrUnit={}",
-                    nunotaOrig, item.sequencia(), item.codProd(), vlrUnit
+            // 👇 agora buscamos VLRUNIT + PERCDESC de uma vez
+            PrecoDesconto preco = buscarPrecoEDescontoItem(
+                    nunotaOrig,
+                    item.sequencia(),
+                    item.codProd()
             );
 
-            // 2) Calcular novo VLRTOT
-            double novoVlrTot = vlrUnit * qtdConf;
+            double vlrUnit  = preco.vlrUnit();
+            double percDesc = preco.percDesc();
+
+            // se não achar, evita bagunça
+            if (vlrUnit == 0.0) {
+                log.warn(
+                        "[atualizarItensNotaComQuantidades] VLRUNIT=0. Pulando item. NUNOTA={}, SEQ={}, CODPROD={}",
+                        nunotaOrig, item.sequencia(), item.codProd()
+                );
+                continue;
+            }
+
+            double valorBruto = vlrUnit * qtdConf;
+            double fatorDesc  = percDesc / 100.0;
+            double valorDesc  = valorBruto * fatorDesc;
+            double novoVlrTot = valorBruto - valorDesc;
 
             String qtdConfStr = String.format(Locale.US, "%.4f", qtdConf);
-            String vlrTotStr = String.format(Locale.US, "%.2f", novoVlrTot);
+            String vlrTotStr  = String.format(Locale.US, "%.2f", novoVlrTot);
 
             log.info(
-                    "[atualizarItensNotaComQuantidades] Aplicando corte. NUNOTA={}, SEQ={}, CODPROD={}, novaQTDNEG={}, novoVLRTOT={}",
-                    nunotaOrig, item.sequencia(), item.codProd(), qtdConfStr, vlrTotStr
+                    "[atualizarItensNotaComQuantidades] Corte com desconto. NUNOTA={}, SEQ={}, CODPROD={}, " +
+                            "qtdConf={}, vlrUnit={}, percDesc={}, valorBruto={}, valorDesc={}, novoVLRTOT={}",
+                    nunotaOrig, item.sequencia(), item.codProd(),
+                    qtdConfStr, vlrUnit, percDesc, valorBruto, valorDesc, novoVlrTot
             );
 
             ObjectNode row = dataRowArray.addObject();
@@ -466,6 +481,8 @@ public class ConferenciaWorkflowService {
 
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
+            // se quiser, pode forçar o PERCDESC também, mas em geral já está certo:
+            // localFields.putObject("PERCDESC").put("$", String.format(Locale.US, "%.4f", percDesc));
 
             ObjectNode key = row.putObject("key");
             key.putObject("NUNOTA").put("$", nunotaOrig.toString());
@@ -607,7 +624,74 @@ public class ConferenciaWorkflowService {
                     vlrUnitStr, nunotaOrig, sequencia, codProd, e);
             return 0.0;
         }
+    }// guarda VLRUNIT + PERCDESC do item
+    private record PrecoDesconto(double vlrUnit, double percDesc) {}
+
+    // Busca VLRUNIT (preço) e PERCDESC (desconto %) do item na TGFITE
+    private PrecoDesconto buscarPrecoEDescontoItem(
+            Long nunotaOrig,
+            Integer sequencia,
+            Integer codProd
+    ) {
+        String sql = """
+        SELECT VLRUNIT, PERCDESC
+          FROM TGFITE
+         WHERE NUNOTA   = %d
+           AND SEQUENCIA = %d
+           AND CODPROD   = %d
+        """.formatted(nunotaOrig, sequencia, codProd);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+        JsonNode responseBody = root.path("responseBody");
+        JsonNode rows = responseBody.path("rows");
+        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
+
+        if (!rows.isArray() || rows.size() == 0) {
+            log.warn("[buscarPrecoEDescontoItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
+                    nunotaOrig, sequencia, codProd);
+            return new PrecoDesconto(0.0, 0.0);
+        }
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        int idxVlrUnit  = indexOf(cols, "VLRUNIT");
+        int idxPercDesc = indexOf(cols, "PERCDESC");
+
+        JsonNode firstRow = rows.get(0);
+
+        String vlrUnitStr  = (idxVlrUnit  >= 0) ? readText(firstRow, idxVlrUnit)  : null;
+        String percDescStr = (idxPercDesc >= 0) ? readText(firstRow, idxPercDesc) : null;
+
+        double vlrUnit = 0.0;
+        double percDesc = 0.0;
+
+        try {
+            if (vlrUnitStr != null && !vlrUnitStr.isBlank()) {
+                vlrUnit = Double.parseDouble(vlrUnitStr);
+            }
+        } catch (NumberFormatException e) {
+            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRUNIT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    vlrUnitStr, nunotaOrig, sequencia, codProd, e);
+        }
+
+        try {
+            if (percDescStr != null && !percDescStr.isBlank()) {
+                percDesc = Double.parseDouble(percDescStr);
+            }
+        } catch (NumberFormatException e) {
+            log.error("[buscarPrecoEDescontoItem] Erro ao converter PERCDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    percDescStr, nunotaOrig, sequencia, codProd, e);
+        }
+
+        log.info(
+                "[buscarPrecoEDescontoItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRUNIT={}, PERCDESC={}",
+                nunotaOrig, sequencia, codProd, vlrUnit, percDesc
+        );
+
+        return new PrecoDesconto(vlrUnit, percDesc);
     }
+
+
+
 
 
     // ----------------- HELPERS -----------------
