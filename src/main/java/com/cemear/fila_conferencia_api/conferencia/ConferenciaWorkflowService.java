@@ -427,6 +427,11 @@ public class ConferenciaWorkflowService {
     // atualiza TGFITE.QTDNEG, VLRTOT, VLRUNIT, VLRDESC
     // usando VLRUNIT, PERCDESC, VLRREPREDSEMDESC
     // ---------------------------------------------
+    // ---------------------------------------------
+// atualiza TGFITE.QTDNEG, VLRTOT, VLRUNIT, VLRDESC
+// aplicando o MESMO PERCDESC original
+// sobre a nova quantidade (qtdConferida)
+// ---------------------------------------------
     private void atualizarItensNotaComQuantidades(
             Long nunotaOrig,
             List<ItemFinalizacaoDTO> itens
@@ -448,95 +453,84 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            // Busca VLRUNIT + PERCDESC + VLRREPREDSEMDESC + VLRDESC do item
+            // Busca VLRUNIT (líquido), PERCDESC, VLRREPREDSEMDESC (cheio) e VLRDESC atual
             PrecoDesconto preco = buscarPrecoEDescontoItem(
                     nunotaOrig,
                     item.sequencia(),
                     item.codProd()
             );
 
-            double vlrUnitAtual      = preco.vlrUnit();
-            double percDesc          = preco.percDesc();
-            double vlrRepSemDescUnit = preco.vlrRepSemDesc();
+            double vlrUnitAtual      = preco.vlrUnit();        // normalmente valor líquido atual
+            double percDesc          = preco.percDesc();       // ex: 20,00 / 8,23
+            double vlrRepSemDescUnit = preco.vlrRepSemDesc();  // valor cheio unitário, se tiver
             double vlrDescOriginal   = preco.vlrDesc();
-
-            if (vlrUnitAtual == 0.0 && vlrRepSemDescUnit == 0.0) {
-                log.warn(
-                        "[atualizarItensNotaComQuantidades] Preços zerados. Pulando item. NUNOTA={}, SEQ={}, CODPROD={}",
-                        nunotaOrig, item.sequencia(), item.codProd()
-                );
-                continue;
-            }
-
-            // --------- NOVA QUANTIDADE + DESCONTO -----------
-            double valorBrutoSemDesc;  // total sem desconto
-            double valorDescNovo;      // novo VLRDESC
-            double novoVlrTot;         // novo VLRTOT (líquido)
-            double novoVlrUnit;        // novo VLRUNIT (líquido)
 
             double fatorDesc = percDesc / 100.0;
 
-            if (vlrRepSemDescUnit > 0.0 && percDesc > 0.0) {
-                // Cenário ideal: temos o valor cheio por unidade e o % de desc
-                valorBrutoSemDesc = vlrRepSemDescUnit * qtdConf;
-                valorBrutoSemDesc = round(valorBrutoSemDesc, 2);
+            // ---------------- LÓGICA NOVA ----------------
+            // Queremos SEMPRE aplicar o MESMO %desconto
+            // em cima da nova quantidade
+            double brutoUnit;           // valor cheio unitário (sem desconto)
+            double valorBrutoSemDesc;   // total bruto linha
+            double valorDescNovo;       // novo VLRDESC
+            double novoVlrTot;          // novo VLRTOT (líquido)
+            double novoVlrUnit;         // novo VLRUNIT (líquido)
 
-                valorDescNovo = valorBrutoSemDesc * fatorDesc;
-                valorDescNovo = round(valorDescNovo, 2);
+            if (percDesc > 0.0) {
+                // 1) Descobrimos o unitário cheio
+                if (vlrRepSemDescUnit > 0.0) {
+                    // melhor cenário: já temos o preço cheio na TGFITE
+                    brutoUnit = vlrRepSemDescUnit;
+                } else {
+                    // reconstrói o cheio a partir do líquido e do %desconto
+                    // líquido = cheio * (1 - percDesc)
+                    // -> cheio = líquido / (1 - percDesc)
+                    if (fatorDesc >= 1.0) {
+                        // proteção pra %desc bizarro
+                        brutoUnit = vlrUnitAtual;
+                    } else {
+                        brutoUnit = vlrUnitAtual / (1.0 - fatorDesc);
+                    }
+                }
 
-                novoVlrTot = valorBrutoSemDesc - valorDescNovo;
-                novoVlrTot = round(novoVlrTot, 2);
+                // 2) Recalcula tudo proporcionalmente à nova quantidade
+                valorBrutoSemDesc = round(brutoUnit * qtdConf, 2);
+                valorDescNovo     = round(valorBrutoSemDesc * fatorDesc, 2);
+                novoVlrTot        = round(valorBrutoSemDesc - valorDescNovo, 2);
 
                 if (qtdConf != 0) {
-                    novoVlrUnit = novoVlrTot / qtdConf;
+                    novoVlrUnit = round(novoVlrTot / qtdConf, 6);
                 } else {
-                    novoVlrUnit = vlrUnitAtual;
+                    novoVlrUnit = round(vlrUnitAtual, 6);
                 }
-                novoVlrUnit = round(novoVlrUnit, 6);
 
                 log.info(
-                        "[atualizarItensNotaComQuantidades] (REPSEM + PERCDESC) NUNOTA={}, SEQ={}, CODPROD={}, " +
-                                "qtdConf={}, vlrRepSemDescUnit={}, percDesc={}, brutoSemDesc={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
+                        "[atualizarItensNotaComQuantidades] (DESCONTO_PROPORCIONAL) NUNOTA={}, SEQ={}, CODPROD={}, " +
+                                "qtdConf={}, brutoUnit={}, percDesc={}, brutoTotal={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
                         nunotaOrig, item.sequencia(), item.codProd(),
-                        qtdConf, vlrRepSemDescUnit, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
+                        qtdConf, brutoUnit, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
                 );
             } else {
-                // Fallback: usa VLRUNIT atual e PERCDESC (se houver)
-                novoVlrTot = vlrUnitAtual * qtdConf;
-                novoVlrTot = round(novoVlrTot, 2);
-
-                if (percDesc > 0.0) {
-                    // Reconstroi o bruto a partir do líquido + % desc
-                    double brutoEstimado = novoVlrTot / (1.0 - fatorDesc);
-                    brutoEstimado = round(brutoEstimado, 2);
-                    valorDescNovo = brutoEstimado - novoVlrTot;
-                    valorDescNovo = round(valorDescNovo, 2);
-                    valorBrutoSemDesc = brutoEstimado;
-                } else if (vlrDescOriginal > 0.0) {
-                    // Mantém proporção do desconto original (se quiser sofisticar, pode considerar qtd original)
-                    valorDescNovo = vlrDescOriginal; // simples, não proporcional
-                    valorDescNovo = round(valorDescNovo, 2);
-                    valorBrutoSemDesc = novoVlrTot + valorDescNovo;
-                } else {
-                    valorDescNovo = 0.0;
-                    valorBrutoSemDesc = novoVlrTot;
-                }
+                // Sem desconto (% = 0): só ajusta pela nova quantidade
+                valorBrutoSemDesc = round(vlrUnitAtual * qtdConf, 2);
+                valorDescNovo     = 0.0;
+                novoVlrTot        = valorBrutoSemDesc;
 
                 if (qtdConf != 0) {
-                    novoVlrUnit = novoVlrTot / qtdConf;
+                    novoVlrUnit = round(novoVlrTot / qtdConf, 6);
                 } else {
-                    novoVlrUnit = vlrUnitAtual;
+                    novoVlrUnit = round(vlrUnitAtual, 6);
                 }
-                novoVlrUnit = round(novoVlrUnit, 6);
 
                 log.info(
-                        "[atualizarItensNotaComQuantidades] (FALLBACK) NUNOTA={}, SEQ={}, CODPROD={}, " +
-                                "qtdConf={}, vlrUnitAtual={}, percDesc={}, brutoEstimado={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
+                        "[atualizarItensNotaComQuantidades] (SEM_DESCONTO) NUNOTA={}, SEQ={}, CODPROD={}, " +
+                                "qtdConf={}, vlrUnitAtual={}, novoVLRTOT={}, novoVLRUNIT={}",
                         nunotaOrig, item.sequencia(), item.codProd(),
-                        qtdConf, vlrUnitAtual, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
+                        qtdConf, vlrUnitAtual, novoVlrTot, novoVlrUnit
                 );
             }
 
+            // Monta strings no padrão US (ponto decimal)
             String qtdConfStr  = String.format(Locale.US, "%.4f", qtdConf);
             String vlrTotStr   = String.format(Locale.US, "%.2f", novoVlrTot);
             String vlrUnitStr  = String.format(Locale.US, "%.6f", novoVlrUnit);
@@ -546,10 +540,10 @@ public class ConferenciaWorkflowService {
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
-            // QTDNEG ajustada
+            // QTDNEG ajustada (quantidade cortada)
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
 
-            // Valores financeiros recalculados
+            // Valores financeiros recalculados proporcionalmente
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
             localFields.putObject("VLRUNIT").put("$", vlrUnitStr);
             localFields.putObject("VLRDESC").put("$", vlrDescStr);
@@ -575,6 +569,7 @@ public class ConferenciaWorkflowService {
         JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
+
 
     // Recalcula o total da nota (somando VLRTOT dos itens) e atualiza TGFCAB.VLRNOTA
     private void atualizarCabecalhoNotaComNovoTotal(Long nunotaOrig) {
