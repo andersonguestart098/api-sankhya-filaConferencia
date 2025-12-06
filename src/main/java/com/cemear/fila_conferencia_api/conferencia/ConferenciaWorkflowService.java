@@ -278,7 +278,7 @@ public class ConferenciaWorkflowService {
 
     // =========================================================================
     // 5) FINALIZAR CONFERÊNCIA DIVERGENTE (com corte)
-    //    - Atualiza TGFCOI2, TGFITE, TGFCAB e Mongo
+    //    - Atualiza TGFCOI2, TGFITE e Mongo
     // =========================================================================
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
@@ -332,10 +332,7 @@ public class ConferenciaWorkflowService {
             // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte proporcional)
             atualizarItensNotaComQuantidades(nunotaOrig, itens);
 
-            // 3) Atualizar TGFCAB.VLRNOTA com a soma dos VLRTOT já cortados
-            atualizarCabecalhoNotaComNovoTotal(nunotaOrig);
-
-            // 4) Registrar histórico no Mongo (qtdConferida e qtdAjustada)
+            // 3) Registrar histórico no Mongo (qtdConferida e qtdAjustada)
             for (ItemFinalizacaoDTO item : itens) {
                 if (item.qtdConferida() == null) {
                     log.warn("DEBUG: qtdConferida é null para item seq={} codProd={}",
@@ -375,7 +372,7 @@ public class ConferenciaWorkflowService {
                     nuconf, nunotaOrig);
         }
 
-        // 5) Finalizar cabeçalho de conferência (STATUS = F)
+        // 4) Finalizar cabeçalho de conferência (STATUS = F)
         return finalizarCabecalhoConferenciaDivergente(nuconf, codUsuario);
     }
 
@@ -490,7 +487,7 @@ public class ConferenciaWorkflowService {
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
-            // Atualiza somente QTDNEG e VLRTOT
+            // Atualiza somente QTDNEG e VLRTOT (mantendo o resto da nota)
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
 
@@ -513,92 +510,6 @@ public class ConferenciaWorkflowService {
 
         JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
-    }
-
-    // =========================================================================
-    // 5.3) Atualiza TGFCAB.VLRNOTA somando VLRTOT dos itens (já cortados)
-    // =========================================================================
-    private void atualizarCabecalhoNotaComNovoTotal(Long nunotaOrig) {
-        double novoVlrNota = calcularNovoVlrNota(nunotaOrig);
-
-        String vlrNotaStr = String.format(Locale.US, "%.2f", novoVlrNota);
-
-        log.info(
-                "[atualizarCabecalhoNotaComNovoTotal] Atualizando VLRNOTA. NUNOTA={} novoVlrNota={}",
-                nunotaOrig, vlrNotaStr
-        );
-
-        ObjectNode root = objectMapper.createObjectNode();
-        ObjectNode requestBody = root.putObject("requestBody");
-        ObjectNode dataSet = requestBody.putObject("dataSet");
-
-        dataSet.put("rootEntity", "CabecalhoNota");
-        dataSet.put("includePresentationFields", "S");
-
-        ObjectNode dataRow = dataSet.putObject("dataRow");
-        ObjectNode localFields = dataRow.putObject("localFields");
-
-        localFields.putObject("VLRNOTA").put("$", vlrNotaStr);
-
-        ObjectNode key = dataRow.putObject("key");
-        key.putObject("NUNOTA").put("$", nunotaOrig.toString());
-
-        ObjectNode entity = dataSet.putObject("entity");
-        ObjectNode fieldSet = entity.putObject("fieldSet");
-        fieldSet.put("list", "NUNOTA,VLRNOTA");
-
-        log.info(
-                "\n################## DEBUG_UPDATE_TGFCAB_VLRNOTA ##################\n" +
-                        "nunotaOrig={} Payload:\n{}\n" +
-                        "############################################################",
-                nunotaOrig, root.toPrettyString()
-        );
-
-        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
-        log.info("✅ TGFCAB_VLRNOTA_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
-    }
-
-    // Soma o VLRTOT de todos os itens já cortados da nota
-    private double calcularNovoVlrNota(Long nunotaOrig) {
-        String sql = """
-        SELECT SUM(VLRTOT) AS NOVO_VLRNOTA
-          FROM TGFITE
-         WHERE NUNOTA = %d
-        """.formatted(nunotaOrig);
-
-        JsonNode root = gatewayClient.executeDbExplorer(sql);
-        JsonNode responseBody = root.path("responseBody");
-        JsonNode rows = responseBody.path("rows");
-        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
-
-        if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[calcularNovoVlrNota] Nenhum item encontrado para somar. NUNOTA={}", nunotaOrig);
-            return 0.0;
-        }
-
-        List<String> cols = extractColumns(fieldsMetadata);
-        int idxTotal = indexOf(cols, "NOVO_VLRNOTA");
-        if (idxTotal < 0) {
-            idxTotal = 0; // fallback
-        }
-
-        JsonNode firstRow = rows.get(0);
-        String totalStr = readText(firstRow, idxTotal);
-
-        if (totalStr == null || totalStr.isBlank()) {
-            log.warn("[calcularNovoVlrNota] Total nulo/vazio. NUNOTA={}", nunotaOrig);
-            return 0.0;
-        }
-
-        try {
-            double total = Double.parseDouble(totalStr);
-            log.info("[calcularNovoVlrNota] NUNOTA={} totalItens={}", nunotaOrig, total);
-            return total;
-        } catch (NumberFormatException e) {
-            log.error("[calcularNovoVlrNota] Erro ao converter total='{}' para double. NUNOTA={}",
-                    totalStr, nunotaOrig, e);
-            return 0.0;
-        }
     }
 
     // =========================================================================
