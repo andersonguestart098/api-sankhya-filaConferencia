@@ -32,12 +32,13 @@ public class ConferenciaWorkflowService {
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
-    // ---------------------------------
-    // INICIAR CONFERÊNCIA (CabecalhoConferencia)
-    // ---------------------------------
+    // =========================================================================
+    // 1) INICIAR CONFERÊNCIA (CabecalhoConferencia / TGFCOI)
+    // =========================================================================
     public JsonNode iniciarConferencia(Long nunotaOrig, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
+        // Monta payload do CRUDServiceProvider.saveRecord
         ObjectNode root = objectMapper.createObjectNode();
         ObjectNode requestBody = root.putObject("requestBody");
         ObjectNode dataSet = requestBody.putObject("dataSet");
@@ -48,6 +49,7 @@ public class ConferenciaWorkflowService {
         ObjectNode dataRow = dataSet.putObject("dataRow");
         ObjectNode localFields = dataRow.putObject("localFields");
 
+        // STATUS A = Em Conferência
         localFields.putObject("STATUS").put("$", "A");
         localFields.putObject("DHINICONF").put("$", agora);
         localFields.putObject("DHFINCONF").put("$", agora);
@@ -66,9 +68,9 @@ public class ConferenciaWorkflowService {
         );
     }
 
-    // ---------------------------------
-    // ATUALIZAR NUCONF NO CABEÇALHO DA NOTA (TGFCAB)
-    // ---------------------------------
+    // =========================================================================
+    // 2) ATUALIZAR NUCONF NO CABEÇALHO DA NOTA (TGFCAB)
+    // =========================================================================
     public void atualizarNuconfCabecalhoNota(Long nunotaOrig, Long nuconf) {
         ObjectNode root = objectMapper.createObjectNode();
         ObjectNode requestBody = root.putObject("requestBody");
@@ -78,7 +80,6 @@ public class ConferenciaWorkflowService {
         dataSet.put("includePresentationFields", "S");
 
         ObjectNode dataRow = dataSet.putObject("dataRow");
-
         ObjectNode localFields = dataRow.putObject("localFields");
         localFields.putObject("NUCONFATUAL").put("$", nuconf.toString());
 
@@ -92,10 +93,10 @@ public class ConferenciaWorkflowService {
         gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
 
-    // ------------------------------------------------------
-    // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
-    // + REGISTRAR QTDNEG ORIGINAL NO MONGO
-    // ------------------------------------------------------
+    // =========================================================================
+    // 3) COPIAR ITENS DA TGFITE PARA TGFCOI2
+    //    + REGISTRAR QTDNEG ORIGINAL NO MONGO
+    // =========================================================================
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
         log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
                 nunotaOrig, nuconf);
@@ -135,6 +136,7 @@ public class ConferenciaWorkflowService {
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 
+        // Monta payload para inserir em DetalhesConferencia (TGFCOI2)
         ObjectNode rootReq = objectMapper.createObjectNode();
         ObjectNode requestBody2 = rootReq.putObject("requestBody");
         ObjectNode dataSet = requestBody2.putObject("dataSet");
@@ -151,6 +153,7 @@ public class ConferenciaWorkflowService {
             String seqConf = readText(r, iSequencia);
             Integer seqInt;
 
+            // Garante SEQCONF sequencial caso venha nulo no TGFITE
             if (seqConf == null || seqConf.isBlank()) {
                 seqInt = count + 1;
                 seqConf = String.valueOf(seqInt);
@@ -190,7 +193,7 @@ public class ConferenciaWorkflowService {
                 }
             }
 
-            // REGISTRA SNAPSHOT ORIGINAL NO MONGO
+            // Snapshot da QTD original no Mongo pra histórico
             if (qtdOriginal != null) {
                 try {
                     conferenciaItemMongoService.registrarQtdOriginal(
@@ -206,6 +209,7 @@ public class ConferenciaWorkflowService {
                 }
             }
 
+            // Monta linha para DetalhesConferencia
             ObjectNode rowNode = dataRowArray.addObject();
             ObjectNode local = rowNode.putObject("localFields");
 
@@ -237,9 +241,9 @@ public class ConferenciaWorkflowService {
         );
     }
 
-    // ---------------------------------
-    // FINALIZAR CONFERÊNCIA NORMAL (STATUS = F)
-    // ---------------------------------
+    // =========================================================================
+    // 4) FINALIZAR CONFERÊNCIA NORMAL (sem corte / STATUS = F)
+    // =========================================================================
     public JsonNode finalizarConferencia(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
@@ -272,10 +276,10 @@ public class ConferenciaWorkflowService {
         );
     }
 
-    // ---------------------------------
-    // FINALIZAR CONFERÊNCIA DIVERGENTE
-    // Atualiza TGFCOI2, TGFITE, TGFCAB e Mongo
-    // ---------------------------------
+    // =========================================================================
+    // 5) FINALIZAR CONFERÊNCIA DIVERGENTE (com corte)
+    //    - Atualiza TGFCOI2, TGFITE, TGFCAB e Mongo
+    // =========================================================================
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
         Long nunotaOrig = req.nunotaOrig();
@@ -322,16 +326,16 @@ public class ConferenciaWorkflowService {
         }
 
         if (itens != null && !itens.isEmpty()) {
-            // 1) Atualizar TGFCOI2 (DetalhesConferencia) com QTDCONF = qtdConferida
+            // 1) Atualizar TGFCOI2 com QTDCONF = qtdConferida
             atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
 
-            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte efetivo, com desconto)
+            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte proporcional)
             atualizarItensNotaComQuantidades(nunotaOrig, itens);
 
-            // 2.1) Atualizar TGFCAB.VLRNOTA com a soma dos VLRTOT já cortados
+            // 3) Atualizar TGFCAB.VLRNOTA com a soma dos VLRTOT já cortados
             atualizarCabecalhoNotaComNovoTotal(nunotaOrig);
 
-            // 3) Atualizar Mongo com qtdConferida / qtdAjustada
+            // 4) Registrar histórico no Mongo (qtdConferida e qtdAjustada)
             for (ItemFinalizacaoDTO item : itens) {
                 if (item.qtdConferida() == null) {
                     log.warn("DEBUG: qtdConferida é null para item seq={} codProd={}",
@@ -343,7 +347,6 @@ public class ConferenciaWorkflowService {
                     log.info("📝 SALVANDO_NO_MONGO - nunota={} seq={} qtdConferida={}",
                             nunotaOrig, item.sequencia(), item.qtdConferida());
 
-                    // Registrar quantidade conferida
                     conferenciaItemMongoService.registrarQtdConferida(
                             nunotaOrig,
                             item.sequencia(),
@@ -372,11 +375,13 @@ public class ConferenciaWorkflowService {
                     nuconf, nunotaOrig);
         }
 
-        // 4) Finalizar cabeçalho (STATUS = F)
+        // 5) Finalizar cabeçalho de conferência (STATUS = F)
         return finalizarCabecalhoConferenciaDivergente(nuconf, codUsuario);
     }
 
-    // atualiza TGFCOI2 (DetalhesConferencia)
+    // =========================================================================
+    // 5.1) Atualiza TGFCOI2 (DetalhesConferencia) com QTDCONF
+    // =========================================================================
     private void atualizarDetalhesConferenciaComQuantidades(
             Long nuconf,
             List<ItemFinalizacaoDTO> itens
@@ -423,15 +428,10 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // ---------------------------------------------
-    // atualiza TGFITE.QTDNEG, VLRTOT, VLRUNIT, VLRDESC
-    // usando VLRUNIT, PERCDESC, VLRREPREDSEMDESC
-    // ---------------------------------------------
-    // ---------------------------------------------
-// atualiza TGFITE.QTDNEG, VLRTOT, VLRUNIT, VLRDESC
-// aplicando o MESMO PERCDESC original
-// sobre a nova quantidade (qtdConferida)
-// ---------------------------------------------
+    // =========================================================================
+    // 5.2) Atualiza TGFITE.QTDNEG e VLRTOT de forma PROPORCIONAL
+    //      usando os totais originais do item
+    // =========================================================================
     private void atualizarItensNotaComQuantidades(
             Long nunotaOrig,
             List<ItemFinalizacaoDTO> itens
@@ -453,101 +453,46 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            // Busca VLRUNIT (líquido), PERCDESC, VLRREPREDSEMDESC (cheio) e VLRDESC atual
-            PrecoDesconto preco = buscarPrecoEDescontoItem(
+            // Busca VLRTOT e QTDNEG originais na TGFITE para este item
+            TotaisItem totaisOrig = buscarTotaisOriginaisItem(
                     nunotaOrig,
                     item.sequencia(),
                     item.codProd()
             );
 
-            double vlrUnitAtual      = preco.vlrUnit();        // normalmente valor líquido atual
-            double percDesc          = preco.percDesc();       // ex: 20,00 / 8,23
-            double vlrRepSemDescUnit = preco.vlrRepSemDesc();  // valor cheio unitário, se tiver
-            double vlrDescOriginal   = preco.vlrDesc();
+            double vlrTotOriginal = totaisOrig.vlrTotOriginal();
+            double qtdOriginal    = totaisOrig.qtdOriginal();
 
-            double fatorDesc = percDesc / 100.0;
-
-            // ---------------- LÓGICA NOVA ----------------
-            // Queremos SEMPRE aplicar o MESMO %desconto
-            // em cima da nova quantidade
-            double brutoUnit;           // valor cheio unitário (sem desconto)
-            double valorBrutoSemDesc;   // total bruto linha
-            double valorDescNovo;       // novo VLRDESC
-            double novoVlrTot;          // novo VLRTOT (líquido)
-            double novoVlrUnit;         // novo VLRUNIT (líquido)
-
-            if (percDesc > 0.0) {
-                // 1) Descobrimos o unitário cheio
-                if (vlrRepSemDescUnit > 0.0) {
-                    // melhor cenário: já temos o preço cheio na TGFITE
-                    brutoUnit = vlrRepSemDescUnit;
-                } else {
-                    // reconstrói o cheio a partir do líquido e do %desconto
-                    // líquido = cheio * (1 - percDesc)
-                    // -> cheio = líquido / (1 - percDesc)
-                    if (fatorDesc >= 1.0) {
-                        // proteção pra %desc bizarro
-                        brutoUnit = vlrUnitAtual;
-                    } else {
-                        brutoUnit = vlrUnitAtual / (1.0 - fatorDesc);
-                    }
-                }
-
-                // 2) Recalcula tudo proporcionalmente à nova quantidade
-                valorBrutoSemDesc = round(brutoUnit * qtdConf, 2);
-                valorDescNovo     = round(valorBrutoSemDesc * fatorDesc, 2);
-                novoVlrTot        = round(valorBrutoSemDesc - valorDescNovo, 2);
-
-                if (qtdConf != 0) {
-                    novoVlrUnit = round(novoVlrTot / qtdConf, 6);
-                } else {
-                    novoVlrUnit = round(vlrUnitAtual, 6);
-                }
-
-                log.info(
-                        "[atualizarItensNotaComQuantidades] (DESCONTO_PROPORCIONAL) NUNOTA={}, SEQ={}, CODPROD={}, " +
-                                "qtdConf={}, brutoUnit={}, percDesc={}, brutoTotal={}, descNovo={}, novoVLRTOT={}, novoVLRUNIT={}",
-                        nunotaOrig, item.sequencia(), item.codProd(),
-                        qtdConf, brutoUnit, percDesc, valorBrutoSemDesc, valorDescNovo, novoVlrTot, novoVlrUnit
+            if (vlrTotOriginal == 0.0 || qtdOriginal <= 0.0) {
+                log.warn(
+                        "[atualizarItensNotaComQuantidades] Totais originais inválidos. " +
+                                "NUNOTA={}, SEQ={}, CODPROD={}, vlrTotOriginal={}, qtdOriginal={}",
+                        nunotaOrig, item.sequencia(), item.codProd(), vlrTotOriginal, qtdOriginal
                 );
-            } else {
-                // Sem desconto (% = 0): só ajusta pela nova quantidade
-                valorBrutoSemDesc = round(vlrUnitAtual * qtdConf, 2);
-                valorDescNovo     = 0.0;
-                novoVlrTot        = valorBrutoSemDesc;
-
-                if (qtdConf != 0) {
-                    novoVlrUnit = round(novoVlrTot / qtdConf, 6);
-                } else {
-                    novoVlrUnit = round(vlrUnitAtual, 6);
-                }
-
-                log.info(
-                        "[atualizarItensNotaComQuantidades] (SEM_DESCONTO) NUNOTA={}, SEQ={}, CODPROD={}, " +
-                                "qtdConf={}, vlrUnitAtual={}, novoVLRTOT={}, novoVLRUNIT={}",
-                        nunotaOrig, item.sequencia(), item.codProd(),
-                        qtdConf, vlrUnitAtual, novoVlrTot, novoVlrUnit
-                );
+                // fallback: se não achar nada, não mexe nesse item
+                continue;
             }
 
-            // Monta strings no padrão US (ponto decimal)
-            String qtdConfStr  = String.format(Locale.US, "%.4f", qtdConf);
-            String vlrTotStr   = String.format(Locale.US, "%.2f", novoVlrTot);
-            String vlrUnitStr  = String.format(Locale.US, "%.6f", novoVlrUnit);
-            String vlrDescStr  = String.format(Locale.US, "%.2f", valorDescNovo);
-            String percDescStr = String.format(Locale.US, "%.4f", percDesc);
+            // Fator de corte: ex. 10 -> 7 peças => fator = 0,7
+            double fator      = qtdConf / qtdOriginal;
+            double novoVlrTot = round(vlrTotOriginal * fator, 2);
+
+            String qtdConfStr = String.format(Locale.US, "%.4f", qtdConf);
+            String vlrTotStr  = String.format(Locale.US, "%.2f", novoVlrTot);
+
+            log.info(
+                    "[atualizarItensNotaComQuantidades] Corte proporcional. NUNOTA={}, SEQ={}, CODPROD={}, " +
+                            "qtdOrig={}, qtdConf={}, fator={}, vlrTotOrig={}, novoVLRTOT={}",
+                    nunotaOrig, item.sequencia(), item.codProd(),
+                    qtdOriginal, qtdConf, fator, vlrTotOriginal, novoVlrTot
+            );
 
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
-            // QTDNEG ajustada (quantidade cortada)
+            // Atualiza somente QTDNEG e VLRTOT
             localFields.putObject("QTDNEG").put("$", qtdConfStr);
-
-            // Valores financeiros recalculados proporcionalmente
             localFields.putObject("VLRTOT").put("$", vlrTotStr);
-            localFields.putObject("VLRUNIT").put("$", vlrUnitStr);
-            localFields.putObject("VLRDESC").put("$", vlrDescStr);
-            localFields.putObject("PERCDESC").put("$", percDescStr);
 
             ObjectNode key = row.putObject("key");
             key.putObject("NUNOTA").put("$", nunotaOrig.toString());
@@ -556,7 +501,7 @@ public class ConferenciaWorkflowService {
 
         ObjectNode entity = dataSet.putObject("entity");
         ObjectNode fieldSet = entity.putObject("fieldSet");
-        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT,VLRUNIT,VLRDESC,PERCDESC");
+        fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT");
 
         log.info(
                 "\n################## DEBUG_UPDATE_TGFITE ##################\n" +
@@ -570,8 +515,9 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-
-    // Recalcula o total da nota (somando VLRTOT dos itens) e atualiza TGFCAB.VLRNOTA
+    // =========================================================================
+    // 5.3) Atualiza TGFCAB.VLRNOTA somando VLRTOT dos itens (já cortados)
+    // =========================================================================
     private void atualizarCabecalhoNotaComNovoTotal(Long nunotaOrig) {
         double novoVlrNota = calcularNovoVlrNota(nunotaOrig);
 
@@ -612,7 +558,7 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFCAB_VLRNOTA_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // Soma o VLRTOT de todos os itens (já cortados) da nota
+    // Soma o VLRTOT de todos os itens já cortados da nota
     private double calcularNovoVlrNota(Long nunotaOrig) {
         String sql = """
         SELECT SUM(VLRTOT) AS NOVO_VLRNOTA
@@ -655,7 +601,9 @@ public class ConferenciaWorkflowService {
         }
     }
 
-    // finaliza cabeçalho com STATUS = F
+    // =========================================================================
+    // 6) Finalizar cabeçalho de conferência divergente (STATUS = F)
+    // =========================================================================
     private JsonNode finalizarCabecalhoConferenciaDivergente(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
@@ -695,7 +643,9 @@ public class ConferenciaWorkflowService {
         );
     }
 
-    // ----------------- API para o PedidoConferenciaService -----------------
+    // =========================================================================
+    // 7) API auxiliar para o PedidoConferenciaService (qtd original do Mongo)
+    // =========================================================================
     public Double getQtdOriginalItem(Long nunota, Integer sequencia, Double fallbackQtdAtual) {
         log.info(
                 "DEBUG_QTD_ORIGINAL_GET_IN nunota={} seq={} fallbackQtdAtual={}",
@@ -727,24 +677,19 @@ public class ConferenciaWorkflowService {
                 });
     }
 
-    // ----------------- PREÇO + DESCONTO DO ITEM -----------------
+    // =========================================================================
+    // 8) Totais originais por item (VLRTOT + QTDNEG) para cálculo proporcional
+    // =========================================================================
+    private record TotaisItem(double vlrTotOriginal, double qtdOriginal) {}
 
-    // guarda VLRUNIT + PERCDESC + VLRREPREDSEMDESC + VLRDESC do item
-    private record PrecoDesconto(
-            double vlrUnit,
-            double percDesc,
-            double vlrRepSemDesc,
-            double vlrDesc
-    ) {}
-
-    // Busca VLRUNIT, PERCDESC, VLRREPREDSEMDESC e VLRDESC do item na TGFITE
-    private PrecoDesconto buscarPrecoEDescontoItem(
+    // Busca VLRTOT e QTDNEG originais do item na TGFITE
+    private TotaisItem buscarTotaisOriginaisItem(
             Long nunotaOrig,
             Integer sequencia,
             Integer codProd
     ) {
         String sql = """
-        SELECT VLRUNIT, PERCDESC, VLRREPREDSEMDESC, VLRDESC
+        SELECT VLRTOT, QTDNEG
           FROM TGFITE
          WHERE NUNOTA   = %d
            AND SEQUENCIA = %d
@@ -757,74 +702,52 @@ public class ConferenciaWorkflowService {
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
 
         if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[buscarPrecoEDescontoItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
+            log.warn("[buscarTotaisOriginaisItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
                     nunotaOrig, sequencia, codProd);
-            return new PrecoDesconto(0.0, 0.0, 0.0, 0.0);
+            return new TotaisItem(0.0, 0.0);
         }
 
         List<String> cols = extractColumns(fieldsMetadata);
-        int idxVlrUnit       = indexOf(cols, "VLRUNIT");
-        int idxPercDesc      = indexOf(cols, "PERCDESC");
-        int idxVlrRepSemDesc = indexOf(cols, "VLRREPREDSEMDESC");
-        int idxVlrDesc       = indexOf(cols, "VLRDESC");
+        int idxVlrTot  = indexOf(cols, "VLRTOT");
+        int idxQtdNeg  = indexOf(cols, "QTDNEG");
 
         JsonNode firstRow = rows.get(0);
 
-        String vlrUnitStr       = (idxVlrUnit       >= 0) ? readText(firstRow, idxVlrUnit)       : null;
-        String percDescStr      = (idxPercDesc      >= 0) ? readText(firstRow, idxPercDesc)      : null;
-        String vlrRepSemDescStr = (idxVlrRepSemDesc >= 0) ? readText(firstRow, idxVlrRepSemDesc) : null;
-        String vlrDescStr       = (idxVlrDesc       >= 0) ? readText(firstRow, idxVlrDesc)       : null;
+        String vlrTotStr = (idxVlrTot >= 0) ? readText(firstRow, idxVlrTot) : null;
+        String qtdNegStr = (idxQtdNeg >= 0) ? readText(firstRow, idxQtdNeg) : null;
 
-        double vlrUnit = 0.0;
-        double percDesc = 0.0;
-        double vlrRepSemDesc = 0.0;
-        double vlrDesc = 0.0;
+        double vlrTotOriginal = 0.0;
+        double qtdOriginal    = 0.0;
 
         try {
-            if (vlrUnitStr != null && !vlrUnitStr.isBlank()) {
-                vlrUnit = Double.parseDouble(vlrUnitStr);
+            if (vlrTotStr != null && !vlrTotStr.isBlank()) {
+                vlrTotOriginal = Double.parseDouble(vlrTotStr);
             }
         } catch (NumberFormatException e) {
-            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRUNIT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrUnitStr, nunotaOrig, sequencia, codProd, e);
+            log.error("[buscarTotaisOriginaisItem] Erro ao converter VLRTOT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    vlrTotStr, nunotaOrig, sequencia, codProd, e);
         }
 
         try {
-            if (percDescStr != null && !percDescStr.isBlank()) {
-                percDesc = Double.parseDouble(percDescStr);
+            if (qtdNegStr != null && !qtdNegStr.isBlank()) {
+                qtdOriginal = Double.parseDouble(qtdNegStr);
             }
         } catch (NumberFormatException e) {
-            log.error("[buscarPrecoEDescontoItem] Erro ao converter PERCDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    percDescStr, nunotaOrig, sequencia, codProd, e);
-        }
-
-        try {
-            if (vlrRepSemDescStr != null && !vlrRepSemDescStr.isBlank()) {
-                vlrRepSemDesc = Double.parseDouble(vlrRepSemDescStr);
-            }
-        } catch (NumberFormatException e) {
-            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRREPREDSEMDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrRepSemDescStr, nunotaOrig, sequencia, codProd, e);
-        }
-
-        try {
-            if (vlrDescStr != null && !vlrDescStr.isBlank()) {
-                vlrDesc = Double.parseDouble(vlrDescStr);
-            }
-        } catch (NumberFormatException e) {
-            log.error("[buscarPrecoEDescontoItem] Erro ao converter VLRDESC='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrDescStr, nunotaOrig, sequencia, codProd, e);
+            log.error("[buscarTotaisOriginaisItem] Erro ao converter QTDNEG='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
+                    qtdNegStr, nunotaOrig, sequencia, codProd, e);
         }
 
         log.info(
-                "[buscarPrecoEDescontoItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRUNIT={}, PERCDESC={}, VLRREPREDSEMDESC={}, VLRDESC={}",
-                nunotaOrig, sequencia, codProd, vlrUnit, percDesc, vlrRepSemDesc, vlrDesc
+                "[buscarTotaisOriginaisItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRTOT_ORIG={}, QTD_ORIG={}",
+                nunotaOrig, sequencia, codProd, vlrTotOriginal, qtdOriginal
         );
 
-        return new PrecoDesconto(vlrUnit, percDesc, vlrRepSemDesc, vlrDesc);
+        return new TotaisItem(vlrTotOriginal, qtdOriginal);
     }
 
-    // ----------------- HELPERS -----------------
+    // =========================================================================
+    // 9) HELPERS GENÉRICOS
+    // =========================================================================
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
         if (fieldsMetadata != null && fieldsMetadata.isArray()) {
