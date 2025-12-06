@@ -319,8 +319,7 @@ public class ConferenciaWorkflowService {
             // 1) Atualiza TGFCOI2 com QTDCONF
             atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
 
-            // 2) Atualiza SOMENTE QTDCORTE no ItemNota (pedido),
-            //    deixando QTDNEG / VLRTOT / VLRNOTA para o Sankhya ajustar no faturamento.
+            // 2) Atualiza SOMENTE QTDCORTE no ItemNota (pedido)
             atualizarItensNotaComQtdCorte(nunotaOrig, itens);
 
             // 3) Mongo – histórico
@@ -413,7 +412,7 @@ public class ConferenciaWorkflowService {
 
     // =========================================================================
     // 5.2) Atualiza SOMENTE QTDCORTE no ItemNota (pedido)
-    //      Qtd. corte = qtdOriginal (pedido) - qtdConferida
+    //      Qtd. corte = qtdOriginal (Mongo) - qtdConferida
     // =========================================================================
     private void atualizarItensNotaComQtdCorte(
             Long nunotaOrig,
@@ -436,24 +435,25 @@ public class ConferenciaWorkflowService {
 
             Double qtdConf = item.qtdConferida();
 
-            TotaisItem totaisOrig = buscarTotaisOriginaisItem(
+            // Busca qtd original do Mongo (ou usa a própria qtdConf como fallback)
+            Double qtdOriginalObj = getQtdOriginalItem(
                     nunotaOrig,
                     item.sequencia(),
-                    item.codProd()
+                    qtdConf
             );
 
-            double qtdOriginal = totaisOrig.qtdOriginal();
-
-            if (qtdOriginal <= 0.0) {
+            if (qtdOriginalObj == null || qtdOriginalObj <= 0.0) {
                 log.warn(
                         "[atualizarItensNotaComQtdCorte] QTD original inválida. " +
                                 "NUNOTA={}, SEQ={}, CODPROD={}, qtdOriginal={}",
-                        nunotaOrig, item.sequencia(), item.codProd(), qtdOriginal
+                        nunotaOrig, item.sequencia(), item.codProd(), qtdOriginalObj
                 );
                 continue;
             }
 
+            double qtdOriginal = qtdOriginalObj;
             double qtdCorte = qtdOriginal - qtdConf;
+
             if (qtdCorte <= 0.0) {
                 log.info(
                         "[atualizarItensNotaComQtdCorte] Sem corte (qtdCorte<=0). NUNOTA={}, SEQ={}, CODPROD={}, qtdOrig={}, qtdConf={}",
@@ -473,7 +473,7 @@ public class ConferenciaWorkflowService {
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
 
-            // ⚠️ Campo de corte no pedido (ajuste se no dicionário estiver com outro nome)
+            // ⚠️ Campo da "Qtd. corte" no pedido
             localFields.putObject("QTDCORTE").put("$", qtdCorteStr);
 
             ObjectNode key = row.putObject("key");
@@ -574,74 +574,7 @@ public class ConferenciaWorkflowService {
     }
 
     // =========================================================================
-    // 8) Totais originais por item (VLRTOT + QTDNEG)
-    // =========================================================================
-    private record TotaisItem(double vlrTotOriginal, double qtdOriginal) {}
-
-    private TotaisItem buscarTotaisOriginaisItem(
-            Long nunotaOrig,
-            Integer sequencia,
-            Integer codProd
-    ) {
-        String sql = """
-        SELECT VLRTOT, QTDNEG
-          FROM TGFITE
-         WHERE NUNOTA   = %d
-           AND SEQUENCIA = %d
-           AND CODPROD   = %d
-        """.formatted(nunotaOrig, sequencia, codProd);
-
-        JsonNode root = gatewayClient.executeDbExplorer(sql);
-        JsonNode responseBody = root.path("responseBody");
-        JsonNode rows = responseBody.path("rows");
-        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
-
-        if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[buscarTotaisOriginaisItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
-                    nunotaOrig, sequencia, codProd);
-            return new TotaisItem(0.0, 0.0);
-        }
-
-        List<String> cols = extractColumns(fieldsMetadata);
-        int idxVlrTot  = indexOf(cols, "VLRTOT");
-        int idxQtdNeg  = indexOf(cols, "QTDNEG");
-
-        JsonNode firstRow = rows.get(0);
-
-        String vlrTotStr = (idxVlrTot >= 0) ? readText(firstRow, idxVlrTot) : null;
-        String qtdNegStr = (idxQtdNeg >= 0) ? readText(firstRow, idxQtdNeg) : null;
-
-        double vlrTotOriginal = 0.0;
-        double qtdOriginal    = 0.0;
-
-        try {
-            if (vlrTotStr != null && !vlrTotStr.isBlank()) {
-                vlrTotOriginal = Double.parseDouble(vlrTotStr);
-            }
-        } catch (NumberFormatException e) {
-            log.error("[buscarTotaisOriginaisItem] Erro ao converter VLRTOT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrTotStr, nunotaOrig, sequencia, codProd, e);
-        }
-
-        try {
-            if (qtdNegStr != null && !qtdNegStr.isBlank()) {
-                qtdOriginal = Double.parseDouble(qtdNegStr);
-            }
-        } catch (NumberFormatException e) {
-            log.error("[buscarTotaisOriginaisItem] Erro ao converter QTDNEG='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    qtdNegStr, nunotaOrig, sequencia, codProd, e);
-        }
-
-        log.info(
-                "[buscarTotaisOriginaisItem] NUNOTA={}, SEQ={}, CODPROD={}, VLRTOT_ORIG={}, QTD_ORIG={}",
-                nunotaOrig, sequencia, codProd, vlrTotOriginal, qtdOriginal
-        );
-
-        return new TotaisItem(vlrTotOriginal, qtdOriginal);
-    }
-
-    // =========================================================================
-    // 9) HELPERS
+    // 8) HELPERS
     // =========================================================================
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
