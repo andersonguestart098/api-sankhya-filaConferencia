@@ -502,7 +502,7 @@ public class ConferenciaWorkflowService {
         ObjectNode dataRow = dataSet.putObject("dataRow");
         ObjectNode localFields = dataRow.putObject("localFields");
 
-        localFields.putObject("STATUS").put("$", "F");
+        localFields.putObject("STATUS").put("$", "D");
         localFields.putObject("DHFINCONF").put("$", agora);
         localFields.putObject("CODUSUCONF").put("$", codUsuario.toString());
 
