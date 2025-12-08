@@ -93,6 +93,43 @@ public class ConferenciaWorkflowService {
         gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
 
+    // ---------------------------------
+    // Verificar se NUCONF está finalizado OK (STATUS = 'F')
+    // ---------------------------------
+    private boolean conferenciaEstaFinalizadaOk(Long nuconf) {
+        if (nuconf == null) {
+            return false;
+        }
+
+        String sql = """
+            SELECT STATUS
+              FROM TGFCON2
+             WHERE NUCONF = %d
+            """.formatted(nuconf);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+        JsonNode responseBody = root.path("responseBody");
+        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
+        JsonNode rows = responseBody.path("rows");
+
+        if (!rows.isArray() || rows.size() == 0) {
+            log.warn("[conferenciaEstaFinalizadaOk] Nenhum cabeçalho encontrado. NUCONF={}", nuconf);
+            return false;
+        }
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        int idxStatus = indexOf(cols, "STATUS");
+        if (idxStatus < 0) {
+            log.warn("[conferenciaEstaFinalizadaOk] Coluna STATUS não encontrada no metadata. NUCONF={}", nuconf);
+            return false;
+        }
+
+        String status = readText(rows.get(0), idxStatus);
+        log.info("[conferenciaEstaFinalizadaOk] NUCONF={} STATUS_LIDO={}", nuconf, status);
+
+        return "F".equalsIgnoreCase(status);
+    }
+
     // ------------------------------------------------------
     // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
     // + REGISTRAR QTDNEG ORIGINAL NO MONGO
@@ -103,6 +140,19 @@ public class ConferenciaWorkflowService {
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
         log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
                 nunotaOrig, nuconf);
+
+        // 🔒 Segurança: só preenche itens se NUCONF estiver com STATUS = 'F'
+        if (!conferenciaEstaFinalizadaOk(nuconf)) {
+            log.warn("preencherItensConferencia chamado para NUCONF={} com STATUS != 'F'. " +
+                    "Nenhum item será gravado em TGFCOI2.", nuconf);
+
+            ObjectNode ignorado = objectMapper.createObjectNode();
+            ignorado.put("status", "IGNORADO");
+            ignorado.put("motivo", "Conferência não está finalizada OK (STATUS != 'F')");
+            ignorado.put("nunotaOrig", nunotaOrig);
+            ignorado.put("nuconf", nuconf);
+            return ignorado;
+        }
 
         String sql = """
             SELECT
@@ -282,22 +332,22 @@ public class ConferenciaWorkflowService {
 
     // ---------------------------------
     // NOVO FLUXO OK:
-    // 1) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
-    // 2) FINALIZA CABEÇALHO COM STATUS = F
+    // 1) FINALIZA CABEÇALHO (STATUS = F)
+    // 2) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
     // ---------------------------------
     public JsonNode finalizarConferenciaOkComItens(Long nunotaOrig, Long nuconf, Long codUsuario) {
         log.info("#### FINALIZAR_OK_COM_ITENS nunotaOrig={} nuconf={} codUsuario={} ####",
                 nunotaOrig, nuconf, codUsuario);
 
-        // 1) Preenche itens de conferência
-        JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
-        log.info("FINALIZAR_OK_COM_ITENS - DetalhesConferencia preenchidos: {}",
-                respDetalhes != null ? "SUCESSO" : "FALHA");
-
-        // 2) Finaliza cabeçalho (STATUS = F)
+        // 1) Finaliza cabeçalho (STATUS = F)
         JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
         log.info("FINALIZAR_OK_COM_ITENS - CabecalhoConferencia finalizado: {}",
                 respCabecalho != null ? "SUCESSO" : "FALHA");
+
+        // 2) Preenche itens de conferência (agora STATUS já é F)
+        JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
+        log.info("FINALIZAR_OK_COM_ITENS - DetalhesConferencia preenchidos: {}",
+                respDetalhes != null ? "SUCESSO" : "FALHA");
 
         // 3) Monta uma resposta combinada (opcional)
         ObjectNode combinado = objectMapper.createObjectNode();
