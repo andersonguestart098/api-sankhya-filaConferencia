@@ -34,6 +34,7 @@ public class ConferenciaWorkflowService {
 
     // ---------------------------------
     // INICIAR CONFERÊNCIA (CabecalhoConferencia)
+    // NOVO FLUXO: APENAS CABEÇALHO (STATUS = A)
     // ---------------------------------
     public JsonNode iniciarConferencia(Long nunotaOrig, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
@@ -95,6 +96,9 @@ public class ConferenciaWorkflowService {
     // ------------------------------------------------------
     // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
     // + REGISTRAR QTDNEG ORIGINAL NO MONGO
+    //
+    // NOVO FLUXO: ESTE MÉTODO DEVE SER CHAMADO
+    // APENAS QUANDO A CONFERÊNCIA FOR FINALIZADA OK.
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
         log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
@@ -239,6 +243,10 @@ public class ConferenciaWorkflowService {
 
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA NORMAL (STATUS = F)
+    //
+    // OBS: ESTE MÉTODO APENAS FINALIZA O CABEÇALHO.
+    // PARA O NOVO FLUXO (PREENCHER ITENS + FINALIZAR),
+    // USE O MÉTODO finalizarConferenciaOkComItens() LOGO ABAIXO.
     // ---------------------------------
     public JsonNode finalizarConferencia(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
@@ -273,8 +281,44 @@ public class ConferenciaWorkflowService {
     }
 
     // ---------------------------------
+    // NOVO FLUXO OK:
+    // 1) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
+    // 2) FINALIZA CABEÇALHO COM STATUS = F
+    // ---------------------------------
+    public JsonNode finalizarConferenciaOkComItens(Long nunotaOrig, Long nuconf, Long codUsuario) {
+        log.info("#### FINALIZAR_OK_COM_ITENS nunotaOrig={} nuconf={} codUsuario={} ####",
+                nunotaOrig, nuconf, codUsuario);
+
+        // 1) Preenche itens de conferência
+        JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
+        log.info("FINALIZAR_OK_COM_ITENS - DetalhesConferencia preenchidos: {}",
+                respDetalhes != null ? "SUCESSO" : "FALHA");
+
+        // 2) Finaliza cabeçalho (STATUS = F)
+        JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
+        log.info("FINALIZAR_OK_COM_ITENS - CabecalhoConferencia finalizado: {}",
+                respCabecalho != null ? "SUCESSO" : "FALHA");
+
+        // 3) Monta uma resposta combinada (opcional)
+        ObjectNode combinado = objectMapper.createObjectNode();
+        combinado.set("detalhesConferencia", respDetalhes);
+        combinado.set("cabecalhoConferencia", respCabecalho);
+        combinado.put("nunotaOrig", nunotaOrig);
+        combinado.put("nuconf", nuconf);
+
+        return combinado;
+    }
+
+    // ---------------------------------
     // FINALIZAR CONFERÊNCIA DIVERGENTE
-    // Atualiza TGFCOI2, TGFITE e Mongo
+    //
+    // NOVO FLUXO:
+    // - NÃO ATUALIZA TGFCOI2
+    // - NÃO ATUALIZA TGFITE (SEM CORTE AUTOMÁTICO)
+    // - NÃO MUDA STATUS PARA D (CABEÇALHO PERMANECE EM A)
+    // - APENAS REGISTRA NO MONGO (OPCIONAL) E DEVOLVE UM OK
+    //
+    // O CORTE E DEMAIS REGRAS FICAM 100% NA UI DO SANKHYA.
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
@@ -321,14 +365,8 @@ public class ConferenciaWorkflowService {
                     nuconf, nunotaOrig);
         }
 
+        // NOVO FLUXO: SOMENTE MONGO (SE QUISER MANTER HISTÓRICO)
         if (itens != null && !itens.isEmpty()) {
-            // 1) Atualizar TGFCOI2 (DetalhesConferencia) com QTDCONF = qtdConferida
-            atualizarDetalhesConferenciaComQuantidades(nuconf, itens);
-
-            // 2) Atualizar TGFITE.QTDNEG + VLRTOT (corte efetivo)
-            atualizarItensNotaComQuantidades(nunotaOrig, itens);
-
-            // 3) Atualizar Mongo com qtdConferida / qtdAjustada
             for (ItemFinalizacaoDTO item : itens) {
                 if (item.qtdConferida() == null) {
                     log.warn("DEBUG: qtdConferida é null para item seq={} codProd={}",
@@ -337,10 +375,10 @@ public class ConferenciaWorkflowService {
                 }
 
                 try {
-                    log.info("📝 SALVANDO_NO_MONGO - nunota={} seq={} qtdConferida={}",
+                    log.info("📝 SALVANDO_NO_MONGO (DIVERGENTE) - nunota={} seq={} qtdConferida={}",
                             nunotaOrig, item.sequencia(), item.qtdConferida());
 
-                    // Registrar quantidade conferida
+                    // Registrar quantidade conferida (se fizer sentido manter histórico)
                     conferenciaItemMongoService.registrarQtdConferida(
                             nunotaOrig,
                             item.sequencia(),
@@ -348,30 +386,37 @@ public class ConferenciaWorkflowService {
                             codUsuario != null ? codUsuario.intValue() : null
                     );
 
-                    // Neste fluxo qtdAjustada = qtdConferida
-                    conferenciaItemMongoService.registrarQtdAjustada(
-                            nunotaOrig,
-                            item.sequencia(),
-                            item.qtdConferida(),
-                            codUsuario != null ? codUsuario.intValue() : null
-                    );
+                    // Aqui você pode escolher se quer ou não registrar qtdAjustada no fluxo divergente.
+                    // Como o corte real será feito na UI do Sankhya, podemos simplesmente não mexer:
+                    // conferenciaItemMongoService.registrarQtdAjustada(...)
 
-                    log.info("✅ MONGO_SALVO - nunota={} seq={}",
+                    log.info("✅ MONGO_SALVO (DIVERGENTE) - nunota={} seq={}",
                             nunotaOrig, item.sequencia());
 
                 } catch (Exception e) {
-                    log.error("❌ ERRO_AO_SALVAR_MONGO - nunota={} seq={}",
+                    log.error("❌ ERRO_AO_SALVAR_MONGO (DIVERGENTE) - nunota={} seq={}",
                             nunotaOrig, item.sequencia(), e);
                 }
             }
-        } else {
-            log.warn("Requisição de finalização divergente sem itens. nuconf={}, nunotaOrig={}",
-                    nuconf, nunotaOrig);
         }
 
-        // 4) Finalizar cabeçalho (STATUS = F)
-        return finalizarCabecalhoConferenciaDivergente(nuconf, codUsuario);
+        // IMPORTANTE: NÃO FINALIZA CABEÇALHO AQUI.
+        // CABEÇALHO CONTINUA EM STATUS = A (EM ANDAMENTO)
+        // PARA O CONFERENTE RESOLVER TUDO NA UI DO SANKHYA.
+
+        ObjectNode resp = objectMapper.createObjectNode();
+        resp.put("status", "OK");
+        resp.put("mensagem",
+                "Conferência divergente registrada. Corte e ajustes devem ser feitos na UI do Sankhya. " +
+                        "Cabeçalho permanece em andamento (STATUS = A).");
+        resp.put("nunotaOrig", nunotaOrig);
+        resp.put("nuconf", nuconf);
+
+        return resp;
     }
+
+    // ----------------- MÉTODOS ANTIGOS (AINDA DISPONÍVEIS, MAS OPCIONAIS) -----------------
+    // Se em algum momento você quiser voltar a automatizar corte, esses métodos continuam aqui.
 
     // atualiza TGFCOI2 (DetalhesConferencia)
     private void atualizarDetalhesConferenciaComQuantidades(
@@ -488,7 +533,7 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // finaliza cabeçalho com STATUS = F
+    // finaliza cabeçalho com STATUS = D (ainda disponível, mas não usado no novo fluxo)
     private JsonNode finalizarCabecalhoConferenciaDivergente(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
@@ -563,10 +608,6 @@ public class ConferenciaWorkflowService {
     /**
      * Busca o VLRUNIT do item na TGFITE.
      */
-// antes
-// private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Long codProd) {
-
-// depois
     private double buscarVlrUnitItem(Long nunotaOrig, Integer sequencia, Integer codProd) {
         String sql = """
         SELECT VLRUNIT
@@ -608,7 +649,6 @@ public class ConferenciaWorkflowService {
             return 0.0;
         }
     }
-
 
     // ----------------- HELPERS -----------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
