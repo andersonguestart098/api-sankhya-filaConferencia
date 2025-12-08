@@ -312,13 +312,12 @@ public class ConferenciaWorkflowService {
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA DIVERGENTE
     //
-    // NOVO FLUXO:
+    // DEFINITIVO:
     // - NÃO ATUALIZA TGFCOI2
-    // - NÃO ATUALIZA TGFITE (SEM CORTE AUTOMÁTICO)
-    // - NÃO MUDA STATUS PARA D (CABEÇALHO PERMANECE EM A)
-    // - APENAS REGISTRA NO MONGO (OPCIONAL) E DEVOLVE UM OK
-    //
-    // O CORTE E DEMAIS REGRAS FICAM 100% NA UI DO SANKHYA.
+    // - NÃO ATUALIZA TGFITE
+    // - NÃO MUDA STATUS (CABEÇALHO FICA EM "A")
+    // - NÃO SALVA MAIS NEM NO MONGO
+    // RESULTADO: A TELA DO SANKHYA FICA 100% "LIMPA".
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
@@ -326,7 +325,6 @@ public class ConferenciaWorkflowService {
         Long codUsuario = req.codUsuario();
         List<ItemFinalizacaoDTO> itens = req.itens();
 
-        // LOG COMPLETO DA REQ
         try {
             log.info(
                     "\n################## DEBUG_FINALIZAR_DIVERGENTE_REQ ##################\n" +
@@ -342,72 +340,16 @@ public class ConferenciaWorkflowService {
             log.warn("Não consegui serializar FinalizarDivergenteRequest para log", e);
         }
 
-        // LOG DETALHADO DAS QTD_CONFERIDAS
-        if (itens != null && !itens.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("\n################## DEBUG_QTD_CONFERIDA_CHEGANDO ##################\n");
-            sb.append("nunotaOrig=").append(nunotaOrig)
-                    .append(" nuconf=").append(nuconf)
-                    .append(" totalItens=").append(itens.size()).append("\n");
-
-            for (ItemFinalizacaoDTO it : itens) {
-                sb.append(String.format(
-                        "SEQ=%d CODPROD=%d QTD_CONFERIDA_RECEBIDA=%s%n",
-                        it.sequencia(),
-                        it.codProd(),
-                        String.valueOf(it.qtdConferida())
-                ));
-            }
-            sb.append("###############################################################");
-            log.info(sb.toString());
-        } else {
-            log.warn("DEBUG: Requisição de finalização divergente sem itens. nuconf={}, nunotaOrig={}",
-                    nuconf, nunotaOrig);
-        }
-
-        // NOVO FLUXO: SOMENTE MONGO (SE QUISER MANTER HISTÓRICO)
-        if (itens != null && !itens.isEmpty()) {
-            for (ItemFinalizacaoDTO item : itens) {
-                if (item.qtdConferida() == null) {
-                    log.warn("DEBUG: qtdConferida é null para item seq={} codProd={}",
-                            item.sequencia(), item.codProd());
-                    continue;
-                }
-
-                try {
-                    log.info("📝 SALVANDO_NO_MONGO (DIVERGENTE) - nunota={} seq={} qtdConferida={}",
-                            nunotaOrig, item.sequencia(), item.qtdConferida());
-
-                    // Registrar quantidade conferida (se fizer sentido manter histórico)
-                    conferenciaItemMongoService.registrarQtdConferida(
-                            nunotaOrig,
-                            item.sequencia(),
-                            item.qtdConferida(),
-                            codUsuario != null ? codUsuario.intValue() : null
-                    );
-
-                    // Aqui você pode escolher se quer ou não registrar qtdAjustada no fluxo divergente.
-                    // Como o corte real será feito na UI do Sankhya, podemos simplesmente não mexer:
-                    // conferenciaItemMongoService.registrarQtdAjustada(...)
-
-                    log.info("✅ MONGO_SALVO (DIVERGENTE) - nunota={} seq={}",
-                            nunotaOrig, item.sequencia());
-
-                } catch (Exception e) {
-                    log.error("❌ ERRO_AO_SALVAR_MONGO (DIVERGENTE) - nunota={} seq={}",
-                            nunotaOrig, item.sequencia(), e);
-                }
-            }
-        }
-
-        // IMPORTANTE: NÃO FINALIZA CABEÇALHO AQUI.
-        // CABEÇALHO CONTINUA EM STATUS = A (EM ANDAMENTO)
-        // PARA O CONFERENTE RESOLVER TUDO NA UI DO SANKHYA.
+        // ⚠️ A PARTIR DAQUI: NÃO MEXE EM NENHUM ITEM.
+        // Nada de TGFCOI2, nada de TGFITE, nada de Mongo.
+        log.info("FINALIZAR_DIVERGENTE - Nenhum item será persistido em lugar nenhum. " +
+                "Somente retornando status OK para o app.");
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.put("status", "OK");
         resp.put("mensagem",
-                "Conferência divergente registrada. Corte e ajustes devem ser feitos na UI do Sankhya. " +
+                "Conferência divergente registrada apenas no app. " +
+                        "Nenhum item foi gerado/ajustado no Sankhya. " +
                         "Cabeçalho permanece em andamento (STATUS = A).");
         resp.put("nunotaOrig", nunotaOrig);
         resp.put("nuconf", nuconf);
@@ -533,7 +475,8 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // finaliza cabeçalho com STATUS = D (ainda disponível, mas não usado no novo fluxo)
+    // finaliza cabeçalho com STATUS = D (não usado no novo fluxo,
+    // mas deixei aqui caso você queira reativar algum dia)
     private JsonNode finalizarCabecalhoConferenciaDivergente(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 
