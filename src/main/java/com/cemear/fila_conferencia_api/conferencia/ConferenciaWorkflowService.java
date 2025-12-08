@@ -1,4 +1,3 @@
-// src/main/java/com/cemear/fila_conferencia_api/conferencia/ConferenciaWorkflowService.java
 package com.cemear.fila_conferencia_api.conferencia;
 
 import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest;
@@ -130,12 +129,57 @@ public class ConferenciaWorkflowService {
         return "F".equalsIgnoreCase(status);
     }
 
+    // ---------------------------------
+    // Buscar NUNOTAORIG a partir do NUCONF em TGFCON2
+    // ---------------------------------
+    private Long buscarNunotaOrigPorNuconf(Long nuconf) {
+        if (nuconf == null) {
+            return null;
+        }
+
+        String sql = """
+            SELECT NUNOTAORIG
+              FROM TGFCON2
+             WHERE NUCONF = %d
+            """.formatted(nuconf);
+
+        JsonNode root = gatewayClient.executeDbExplorer(sql);
+        JsonNode responseBody = root.path("responseBody");
+        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
+        JsonNode rows = responseBody.path("rows");
+
+        if (!rows.isArray() || rows.size() == 0) {
+            log.warn("[buscarNunotaOrigPorNuconf] Nenhum registro encontrado. NUCONF={}", nuconf);
+            return null;
+        }
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        int idxNunotaOrig = indexOf(cols, "NUNOTAORIG");
+        if (idxNunotaOrig < 0) {
+            log.warn("[buscarNunotaOrigPorNuconf] Coluna NUNOTAORIG não encontrada no metadata. NUCONF={}", nuconf);
+            return null;
+        }
+
+        String nunotaStr = readText(rows.get(0), idxNunotaOrig);
+        if (nunotaStr == null || nunotaStr.isBlank()) {
+            log.warn("[buscarNunotaOrigPorNuconf] NUNOTAORIG vazio. NUCONF={}", nuconf);
+            return null;
+        }
+
+        try {
+            return Long.valueOf(nunotaStr);
+        } catch (NumberFormatException e) {
+            log.warn("[buscarNunotaOrigPorNuconf] Erro ao converter NUNOTAORIG='{}' para Long. NUCONF={}",
+                    nunotaStr, nuconf, e);
+            return null;
+        }
+    }
+
     // ------------------------------------------------------
     // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
     // + REGISTRAR QTDNEG ORIGINAL NO MONGO
     //
-    // NOVO FLUXO: ESTE MÉTODO DEVE SER CHAMADO
-    // APENAS QUANDO A CONFERÊNCIA FOR FINALIZADA OK.
+    // ESTE MÉTODO SÓ AGE SE STATUS = 'F' EM TGFCON2.
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
         log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
@@ -293,10 +337,6 @@ public class ConferenciaWorkflowService {
 
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA NORMAL (STATUS = F)
-    //
-    // OBS: ESTE MÉTODO APENAS FINALIZA O CABEÇALHO.
-    // PARA O NOVO FLUXO (PREENCHER ITENS + FINALIZAR),
-    // USE O MÉTODO finalizarConferenciaOkComItens() LOGO ABAIXO.
     // ---------------------------------
     public JsonNode finalizarConferencia(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
@@ -331,25 +371,40 @@ public class ConferenciaWorkflowService {
     }
 
     // ---------------------------------
-    // NOVO FLUXO OK:
+    // FLUXO OK COMPLETO:
     // 1) FINALIZA CABEÇALHO (STATUS = F)
-    // 2) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
+    // 2) BUSCA NUNOTAORIG EM TGFCON2
+    // 3) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
     // ---------------------------------
-    public JsonNode finalizarConferenciaOkComItens(Long nunotaOrig, Long nuconf, Long codUsuario) {
-        log.info("#### FINALIZAR_OK_COM_ITENS nunotaOrig={} nuconf={} codUsuario={} ####",
-                nunotaOrig, nuconf, codUsuario);
+    public JsonNode finalizarConferenciaOkComItens(Long nuconf, Long codUsuario) {
+        log.info("#### FINALIZAR_OK_COM_ITENS nuconf={} codUsuario={} ####",
+                nuconf, codUsuario);
 
         // 1) Finaliza cabeçalho (STATUS = F)
         JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
         log.info("FINALIZAR_OK_COM_ITENS - CabecalhoConferencia finalizado: {}",
                 respCabecalho != null ? "SUCESSO" : "FALHA");
 
-        // 2) Preenche itens de conferência (agora STATUS já é F)
+        // 2) Buscar NUNOTAORIG na TGFCON2
+        Long nunotaOrig = buscarNunotaOrigPorNuconf(nuconf);
+        if (nunotaOrig == null) {
+            log.warn("FINALIZAR_OK_COM_ITENS - NUNOTAORIG não encontrado para NUCONF={}. " +
+                    "Somente cabeçalho foi finalizado, itens NÃO serão preenchidos.", nuconf);
+
+            ObjectNode combinado = objectMapper.createObjectNode();
+            combinado.set("cabecalhoConferencia", respCabecalho);
+            combinado.put("nunotaOrig", (String) null);
+            combinado.put("nuconf", nuconf);
+            combinado.put("statusItens", "NAO_PREENCHIDOS_NUNOTAORIG_NULO");
+            return combinado;
+        }
+
+        // 3) Preenche itens de conferência (agora STATUS já é F)
         JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
         log.info("FINALIZAR_OK_COM_ITENS - DetalhesConferencia preenchidos: {}",
                 respDetalhes != null ? "SUCESSO" : "FALHA");
 
-        // 3) Monta uma resposta combinada (opcional)
+        // 4) Monta uma resposta combinada (opcional)
         ObjectNode combinado = objectMapper.createObjectNode();
         combinado.set("detalhesConferencia", respDetalhes);
         combinado.set("cabecalhoConferencia", respCabecalho);
@@ -362,12 +417,10 @@ public class ConferenciaWorkflowService {
     // ---------------------------------
     // FINALIZAR CONFERÊNCIA DIVERGENTE
     //
-    // DEFINITIVO:
     // - NÃO ATUALIZA TGFCOI2
     // - NÃO ATUALIZA TGFITE
     // - NÃO MUDA STATUS (CABEÇALHO FICA EM "A")
-    // - NÃO SALVA MAIS NEM NO MONGO
-    // RESULTADO: A TELA DO SANKHYA FICA 100% "LIMPA".
+    // - NÃO SALVA NEM NO MONGO
     // ---------------------------------
     public JsonNode finalizarConferenciaDivergente(FinalizarDivergenteRequest req) {
         Long nuconf = req.nuconf();
@@ -408,7 +461,6 @@ public class ConferenciaWorkflowService {
     }
 
     // ----------------- MÉTODOS ANTIGOS (AINDA DISPONÍVEIS, MAS OPCIONAIS) -----------------
-    // Se em algum momento você quiser voltar a automatizar corte, esses métodos continuam aqui.
 
     // atualiza TGFCOI2 (DetalhesConferencia)
     private void atualizarDetalhesConferenciaComQuantidades(
@@ -525,8 +577,7 @@ public class ConferenciaWorkflowService {
         log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
     }
 
-    // finaliza cabeçalho com STATUS = D (não usado no novo fluxo,
-    // mas deixei aqui caso você queira reativar algum dia)
+    // finaliza cabeçalho com STATUS = D (não usado no novo fluxo)
     private JsonNode finalizarCabecalhoConferenciaDivergente(Long nuconf, Long codUsuario) {
         String agora = LocalDateTime.now().format(FMT);
 

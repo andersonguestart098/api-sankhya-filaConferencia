@@ -133,19 +133,19 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
-    // 3) Finaliza conferência (STATUS = 'F')
     @PostMapping("/finalizar")
     public ResponseEntity<?> finalizar(@RequestBody FinalizarConferenciaRequest req) {
         log.info("🏁 FINALIZAR_CONFERENCIA - nuconf: {}, codUsuario: {}",
                 req.nuconf(), req.codUsuario());
 
-        conferenciaWorkflowService.finalizarConferencia(
+        // Novo fluxo: finaliza cabeçalho e preenche itens
+        JsonNode resp = conferenciaWorkflowService.finalizarConferenciaOkComItens(
                 req.nuconf(),
                 req.codUsuario()
         );
 
         log.info("✅ CONFERENCIA_FINALIZADA - nuconf: {}", req.nuconf());
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(resp);
     }
 
     // 4) Finaliza conferência divergente
