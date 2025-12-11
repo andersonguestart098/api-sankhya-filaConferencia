@@ -16,8 +16,10 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -30,6 +32,25 @@ public class ConferenciaWorkflowService {
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+
+    // Estrutura interna para agrupar itens por CODPROD
+    private static class ItemAgrupado {
+        final String codProdStr;
+        final String codvol;
+        final String controle;
+        double qtdTotal;
+
+        ItemAgrupado(String codProdStr, String codvol, String controle, double qtdInicial) {
+            this.codProdStr = codProdStr;
+            this.codvol = codvol;
+            this.controle = controle;
+            this.qtdTotal = qtdInicial;
+        }
+
+        void somar(double qtd) {
+            this.qtdTotal += qtd;
+        }
+    }
 
     // ---------------------------------
     // INICIAR CONFERÊNCIA (CabecalhoConferencia)
@@ -179,6 +200,11 @@ public class ConferenciaWorkflowService {
     // COPIAR ITENS DA TGFITE PARA TGFCOI2 (DetalhesConferencia)
     // + REGISTRAR QTDNEG ORIGINAL NO MONGO
     //
+    // NOVO COMPORTAMENTO:
+    // - AGRUPA ITENS POR CODPROD
+    // - SOMA QTDNEG DOS ITENS COM MESMO CÓDIGO
+    // - INSERE APENAS UMA LINHA POR PRODUTO EM TGFCOI2
+    //
     // ESTE MÉTODO SÓ AGE SE STATUS = 'F' EM TGFCON2.
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
@@ -233,14 +259,8 @@ public class ConferenciaWorkflowService {
         int iControle  = indexOf(cols, "CONTROLE");
         int iQtdneg    = indexOf(cols, "QTDNEG");
 
-        ObjectNode rootReq = objectMapper.createObjectNode();
-        ObjectNode requestBody2 = rootReq.putObject("requestBody");
-        ObjectNode dataSet = requestBody2.putObject("dataSet");
-
-        dataSet.put("rootEntity", "DetalhesConferencia");
-        dataSet.put("includePresentationFields", "S");
-
-        ArrayNode dataRowArray = dataSet.putArray("dataRow");
+        // Mapa para agrupar por CODPROD e somar quantidades
+        Map<String, ItemAgrupado> agrupadosPorProduto = new LinkedHashMap<>();
 
         int count = 0;
         for (JsonNode r : rows) {
@@ -288,7 +308,7 @@ public class ConferenciaWorkflowService {
                 }
             }
 
-            // REGISTRA SNAPSHOT ORIGINAL NO MONGO
+            // REGISTRA SNAPSHOT ORIGINAL NO MONGO (por SEQUENCIA, como já fazia antes)
             if (qtdOriginal != null) {
                 try {
                     conferenciaItemMongoService.registrarQtdOriginal(
@@ -304,20 +324,53 @@ public class ConferenciaWorkflowService {
                 }
             }
 
+            // AGRUPA POR CODPROD PARA POPULAR A TGFCOI2
+            if (codprodStr != null && !codprodStr.isBlank() && qtdOriginal != null) {
+                ItemAgrupado agg = agrupadosPorProduto.get(codprodStr);
+                if (agg == null) {
+                    // guarda o primeiro CODVOL/CONTROLE encontrados para este produto
+                    agg = new ItemAgrupado(
+                            codprodStr,
+                            codvol,
+                            controle == null ? "" : controle,
+                            qtdOriginal
+                    );
+                    agrupadosPorProduto.put(codprodStr, agg);
+                } else {
+                    agg.somar(qtdOriginal);
+                }
+            }
+
+            count++;
+        }
+
+        // Monta payload para DetalhesConferencia (TGFCOI2) com itens AGRUPADOS
+        ObjectNode rootReq = objectMapper.createObjectNode();
+        ObjectNode requestBody2 = rootReq.putObject("requestBody");
+        ObjectNode dataSet = requestBody2.putObject("dataSet");
+
+        dataSet.put("rootEntity", "DetalhesConferencia");
+        dataSet.put("includePresentationFields", "S");
+
+        ArrayNode dataRowArray = dataSet.putArray("dataRow");
+
+        int seqConfGlobal = 1;
+        for (ItemAgrupado agg : agrupadosPorProduto.values()) {
             ObjectNode rowNode = dataRowArray.addObject();
             ObjectNode local = rowNode.putObject("localFields");
 
-            local.putObject("NUCONF").put("$", nuconf.toString());
-            local.putObject("SEQCONF").put("$", seqConf);
-            local.putObject("CODBARRA").put("$", "");
-            local.putObject("CODPROD").put("$", codprodStr);
-            local.putObject("CODVOL").put("$", codvol);
-            local.putObject("CONTROLE").put("$", controle == null ? "" : controle);
-            local.putObject("QTDCONFVOLPAD").put("$", qtdneg);
-            local.putObject("QTDCONF").put("$", qtdneg);
-            local.putObject("COPIA").put("$", "N");
+            String seqConfStr = String.valueOf(seqConfGlobal++);
+            String qtdSomadaStr = String.format(Locale.US, "%.4f", agg.qtdTotal);
 
-            count++;
+            local.putObject("NUCONF").put("$", nuconf.toString());
+            local.putObject("SEQCONF").put("$", seqConfStr);
+            local.putObject("CODBARRA").put("$", "");
+            local.putObject("CODPROD").put("$", agg.codProdStr);
+            local.putObject("CODVOL").put("$", agg.codvol);
+            local.putObject("CONTROLE").put("$", agg.controle != null ? agg.controle : "");
+            local.putObject("QTDCONFVOLPAD").put("$", qtdSomadaStr);
+            local.putObject("QTDCONF").put("$", qtdSomadaStr);
+            local.putObject("COPIA").put("$", "N");
         }
 
         ObjectNode entity = dataSet.putObject("entity");
