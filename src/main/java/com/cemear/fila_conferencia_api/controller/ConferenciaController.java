@@ -33,27 +33,38 @@ public class ConferenciaController {
     private final ConferenciaWorkflowService conferenciaWorkflowService;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
 
-    // 1) Lista pedidos pendentes (paginado + filtros)
+    // ============================================================
+    // 1) Lista pedidos pendentes (paginado + filtros + NUNOTA)
+    // ============================================================
     @GetMapping("/pedidos-pendentes")
     public List<PedidoConferenciaDto> listarPendentes(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int pageSize,
+            @RequestParam(defaultValue = "100") int pageSize, // 🔥 agora 100 por página (alinhado com o app)
             @RequestParam(required = false) String status,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataIni,
             @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataFim
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataFim,
+            @RequestParam(required = false) Long nunota // 🔎 novo filtro por NUNOTA
     ) {
+        log.info(
+                "LISTAR_PENDENTES page={}, pageSize={}, status={}, dataIni={}, dataFim={}, nunota={}",
+                page, pageSize, status, dataIni, dataFim, nunota
+        );
+
         return pedidoConferenciaService.listarPendentesPaginado(
                 page,
                 pageSize,
                 status,
                 dataIni,
-                dataFim
+                dataFim,
+                nunota // 👈 repassa pro service
         );
     }
 
+    // ============================================================
     // 2) Inicia conferência para um pedido escolhido
+    // ============================================================
     @PostMapping("/iniciar")
     public ResponseEntity<?> iniciar(@RequestBody IniciarConferenciaRequest req) {
         log.info("🚀 INICIAR_CONFERENCIA - nunotaOrig: {}, codUsuario: {}",
@@ -117,7 +128,9 @@ public class ConferenciaController {
         return ResponseEntity.ok(dtoResposta);
     }
 
-    // Rota opcional para reprocessar/preencher itens manualmente, se necessário
+    // ============================================================
+    // 3) Rota opcional para reprocessar/preencher itens manualmente
+    // ============================================================
     @PostMapping("/preencher-itens")
     public ResponseEntity<?> preencherItens(@RequestBody PreencherItensRequest req) {
         log.info("🔄 PREENCHER_ITENS_MANUAL - nunotaOrig: {}, nuconf: {}",
@@ -133,12 +146,14 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
+    // ============================================================
+    // 4) Finaliza conferência OK (sem divergência)
+    // ============================================================
     @PostMapping("/finalizar")
     public ResponseEntity<?> finalizar(@RequestBody FinalizarConferenciaRequest req) {
         log.info("🏁 FINALIZAR_CONFERENCIA - nuconf: {}, codUsuario: {}",
                 req.nuconf(), req.codUsuario());
 
-        // Novo fluxo: finaliza cabeçalho e preenche itens
         JsonNode resp = conferenciaWorkflowService.finalizarConferenciaOkComItens(
                 req.nuconf(),
                 req.codUsuario()
@@ -148,7 +163,9 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
-    // 4) Finaliza conferência divergente
+    // ============================================================
+    // 5) Finaliza conferência divergente
+    // ============================================================
     @PostMapping("/finalizar-divergente")
     public ResponseEntity<?> finalizarDivergente(@RequestBody FinalizarDivergenteRequest req) {
         log.info("🎯 FINALIZAR_DIVERGENTE - nuconf: {}, nunotaOrig: {}, codUsuario: {}, itens: {}",
@@ -163,8 +180,9 @@ public class ConferenciaController {
         return ResponseEntity.ok(result);
     }
 
-
+    // ============================================================
     // 6) Health check simples
+    // ============================================================
     @GetMapping("/health")
     public ResponseEntity<?> health() {
         log.info("❤️  HEALTH_CHECK");

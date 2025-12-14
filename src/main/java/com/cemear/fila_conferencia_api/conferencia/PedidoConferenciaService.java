@@ -19,11 +19,8 @@ import java.util.List;
 public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
-    private final ConferenciaWorkflowService conferenciaWorkflowService; // 👈 para ler qtdOriginal
+    private final ConferenciaWorkflowService conferenciaWorkflowService;
 
-    // Template com PLACEHOLDERS para filtros + paginação
-    // Inclui CODVEND + NOME_VENDEDOR e campos de conferência
-    // Agora pagina por NUNOTA (cabeçalho), não por linha de item
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
     SELECT
         X.NUNOTA,
@@ -37,11 +34,8 @@ public class PedidoConferenciaService {
         ITE.CODPROD,
         PRO.DESCRPROD            AS DESCRICAO,
         ITE.CODVOL               AS UNIDADE,
-
-        -- quantidade atual da nota (TGFITE já “cortada”)
         ITE.QTDNEG               AS QTD_ATUAL,
 
-        -- quantidades da conferência (TGFCOI2)
         COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
         COI.QTDCONF              AS QTD_CONFERIDA,
 
@@ -52,187 +46,151 @@ public class PedidoConferenciaService {
             CAB.NUNOTA,
             CAB.CODPARC,
             SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
-            ROW_NUMBER() OVER (
-                ORDER BY CAB.NUNOTA DESC
-            ) AS RN              -- 👈 paginação POR NUNOTA
+            ROW_NUMBER() OVER (ORDER BY CAB.NUNOTA DESC) AS RN
         FROM TGFCAB CAB
         WHERE 1 = 1
-          %s   -- Filtro de data
+          %s   -- filtro data + nunota
     ) X
-    JOIN TGFCAB CAB
-        ON CAB.NUNOTA = X.NUNOTA
-    JOIN TGFPAR PAR
-        ON PAR.CODPARC = CAB.CODPARC
-    JOIN TGFITE ITE
-        ON ITE.NUNOTA = X.NUNOTA
-    JOIN TGFPRO PRO
-        ON PRO.CODPROD = ITE.CODPROD
-    LEFT JOIN TGFVEN VEND
-        ON VEND.CODVEND = CAB.CODVEND
+    JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
+    JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
+    JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
+    JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
+    LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
+    LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
 
-    -- junta com os itens da conferência (TGFCOI2)
-    LEFT JOIN TGFCOI2 COI
-        ON COI.NUCONF  = CAB.NUCONFATUAL   -- nuconf atual da nota
-       AND COI.SEQCONF = ITE.SEQUENCIA     -- mesmo item
-
-    WHERE X.STATUS_CONFERENCIA IN (
-        'A', 'AC', 'AL', 'C',
-        'D', 'F',
-        'R', 'RA', 'RD', 'RF',
-        'Z'
-    )
-      %s   -- Filtro de status
-      AND X.RN BETWEEN %d AND %d   -- 👈 paginação por nota aqui
+    WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
+      %s   -- filtro status
+      %s   -- paginação
 
     ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
     """;
 
-
-    // método default sem filtros
     public List<PedidoConferenciaDto> listarPendentes() {
-        return listarPendentesPaginado(0, 100, null, null, null);
+        return listarPendentesPaginado(0, 0, null, null, null, null);
     }
 
-    // paginação + filtros
+    /**
+     * AGORA ACEITA NUNOTA! (6 parâmetros)
+     */
     public List<PedidoConferenciaDto> listarPendentesPaginado(
             int page,
             int pageSize,
             String status,
             LocalDate dataIni,
-            LocalDate dataFim
+            LocalDate dataFim,
+            Long nunotaFiltro  // 👈 NOVO!
     ) {
 
-        int inicio = page * pageSize + 1;          // RN começa em 1
-        int fim = inicio + pageSize - 1;
+        // --------------------- FILTRO DE DATA E NUNOTA ------------------------
+        StringBuilder filtroData = new StringBuilder();
 
-        // ---------- Filtro de data ----------
-        String filtroDataSql;
         if (dataIni != null && dataFim != null) {
             DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
-
-            String iniStr = dataIni.format(fmt);
-            String fimStr = dataFim.format(fmt);
-
-            filtroDataSql = String.format("""
-                    AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
-                    AND CAB.DTNEG <  TO_DATE('%s', 'DD/MM/YYYY') + 1
-                    """, iniStr, fimStr);
+            filtroData.append(String.format("""
+                AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
+                AND CAB.DTNEG < TO_DATE('%s', 'DD/MM/YYYY') + 1
+            """, dataIni.format(fmt), dataFim.format(fmt)));
         } else {
-            // default: mês atual
-            filtroDataSql = """
-                    AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
-                    AND CAB.DTNEG <  ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
-                    """;
+            filtroData.append("""
+                AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
+                AND CAB.DTNEG < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+            """);
         }
 
-        // ---------- Filtro de status ----------
+        // 🔍 FILTRO POR NUNOTA (NOVO!)
+        if (nunotaFiltro != null) {
+            filtroData.append(" AND CAB.NUNOTA = ").append(nunotaFiltro).append(" ");
+            log.info("🔍 FILTRO NUNOTA ATIVO: {}", nunotaFiltro);
+        }
+
+        // --------------------- FILTRO STATUS ------------------------
         String filtroStatusSql = "";
         if (status != null && !status.isBlank()) {
             filtroStatusSql = " AND X.STATUS_CONFERENCIA = '" + status.trim() + "'";
         }
 
-        // monta SQL final
+        // --------------------- PAGINAÇÃO ------------------------
+        String trechoPaginacaoSql = "";
+        if (pageSize > 0) {
+            int inicio = page * pageSize + 1;
+            int fim = inicio + pageSize - 1;
+
+            trechoPaginacaoSql =
+                    " AND X.RN BETWEEN " + inicio + " AND " + fim + " ";
+        }
+
+        // --------------------- MONTA SQL FINAL ------------------------
         String sql = String.format(
                 SQL_PEDIDOS_PAGINADO_TEMPLATE,
-                filtroDataSql,
+                filtroData,
                 filtroStatusSql,
-                inicio,
-                fim
+                trechoPaginacaoSql
         );
 
-        // 🔥 LOG ESCANDALOSO DO SQL
-        log.info("\n\n================= DEBUG_PEDIDOS_CONF =================");
-        log.info("page={}, pageSize={}, status={}, dataIni={}, dataFim={}",
-                page, pageSize, status, dataIni, dataFim);
-        log.info("SQL GERADO:\n{}\n======================================================\n", sql);
+        log.info("SQL FINAL GERADO:\n{}", sql);
 
+        // --------------------- EXECUÇÃO ------------------------
         JsonNode root = gatewayClient.executeDbExplorer(sql);
-
-        // 🔥 LOG ESCANDALOSO DA RESPOSTA BRUTA
-        log.info("########## DEBUG_PEDIDOS_CONF - RESPOSTA DBEXPLORER ##########");
-        log.info("Resposta completa do DbExplorer:\n{}", root.toPrettyString());
-        log.info("################################################################");
-
-        JsonNode responseBody = root.path("responseBody");
-        JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
-        JsonNode rowsNode = responseBody.path("rows");
+        JsonNode rowsNode = root.path("responseBody").path("rows");
+        JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
 
         if (!rowsNode.isArray()) {
-            log.error("Resposta inesperada do DbExplorer: {}", root.toPrettyString());
-            throw new IllegalStateException("DbExplorer não retornou array 'rows' na resposta.");
+            throw new IllegalStateException("DbExplorer não retornou array 'rows'.");
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
-        log.info("DEBUG_PEDIDOS_CONF: total de linhas retornadas: {}", rows.size());
-
         List<String> cols = extractColumns(fieldsMetadata);
-        log.info("DEBUG_PEDIDOS_CONF: colunas retornadas: {}", cols);
 
-        int iNunota        = indexOf(cols, "NUNOTA");
-        int iNumNota       = indexOf(cols, "NUMNOTA");
-        int iNomeParc      = indexOf(cols, "NOMEPARC");
-        int iStatus        = indexOf(cols, "STATUS_CONFERENCIA");
-        int iCodVendedor   = indexOf(cols, "CODVEND");
-        int iNomeVendedor  = indexOf(cols, "NOME_VENDEDOR");
-        int iSeq           = indexOf(cols, "SEQUENCIA");
-        int iCodProd       = indexOf(cols, "CODPROD");
-        int iDescricao     = indexOf(cols, "DESCRICAO");
-        int iUnidade       = indexOf(cols, "UNIDADE");
+        int iNunota = indexOf(cols, "NUNOTA");
+        int iNumNota = indexOf(cols, "NUMNOTA");
+        int iNomeParc = indexOf(cols, "NOMEPARC");
+        int iStatus = indexOf(cols, "STATUS_CONFERENCIA");
+        int iCodVendedor = indexOf(cols, "CODVEND");
+        int iNomeVendedor = indexOf(cols, "NOME_VENDEDOR");
 
-        int iQtdAtual      = indexOf(cols, "QTD_ATUAL");
-        int iQtdEsperada   = indexOf(cols, "QTD_ESPERADA");
-        int iQtdConferida  = indexOf(cols, "QTD_CONFERIDA");
+        int iSeq = indexOf(cols, "SEQUENCIA");
+        int iCodProd = indexOf(cols, "CODPROD");
+        int iDescricao = indexOf(cols, "DESCRICAO");
+        int iUnidade = indexOf(cols, "UNIDADE");
 
-        int iVlrUnit       = indexOf(cols, "VLRUNIT");
-        int iVlrTot        = indexOf(cols, "VLRTOT");
+        int iQtdAtual = indexOf(cols, "QTD_ATUAL");
+        int iQtdEsperada = indexOf(cols, "QTD_ESPERADA");
+        int iQtdConferida = indexOf(cols, "QTD_CONFERIDA");
 
-        if (iNunota < 0 || iStatus < 0) {
-            log.error("Campos obrigatórios não encontrados em fieldsMetadata: {}", cols);
-            throw new IllegalStateException(
-                    "Campos NUNOTA/STATUS_CONFERENCIA não encontrados na resposta do DbExplorer."
-            );
-        }
+        int iVlrUnit = indexOf(cols, "VLRUNIT");
+        int iVlrTot = indexOf(cols, "VLRTOT");
 
-        // 🔥 AGRUPAR POR NUNOTA
         LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
 
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
-            Long nunota       = readLong(r, iNunota);
-            Long numNota      = (iNumNota >= 0)      ? readLong(r, iNumNota)      : null;
-            String nomeParc   = (iNomeParc >= 0)     ? readText(r, iNomeParc)     : null;
-            String st         = readText(r, iStatus);
-            Long codVendedor  = (iCodVendedor >= 0)  ? readLong(r, iCodVendedor)  : null;
-            String nomeVend   = (iNomeVendedor >= 0) ? readText(r, iNomeVendedor) : null;
+            Long nunota = readLong(r, iNunota);
+            String nomeParc = readText(r, iNomeParc);
+            String st = readText(r, iStatus);
+            Long codVend = readLong(r, iCodVendedor);
+            String nomeVend = readText(r, iNomeVendedor);
 
-            Integer sequencia = readInt(r, iSeq);
-            Long codProd      = readLong(r, iCodProd);
-            String descricao  = readText(r, iDescricao);
-            String unidade    = readText(r, iUnidade);
+            Long numNota = readLong(r, iNumNota);
 
-            Double qtdAtual      = readDouble(r, iQtdAtual);      // QTDNEG (cortado)
-            Double qtdEsperada   = readDouble(r, iQtdEsperada);   // QTDCONFVOLPAD
-            Double qtdConferida  = readDouble(r, iQtdConferida);  // QTDCONF
+            Integer seq = readInt(r, iSeq);
+            Long codProd = readLong(r, iCodProd);
+            String desc = readText(r, iDescricao);
+            String un = readText(r, iUnidade);
 
-            Double vlrUnit    = readDouble(r, iVlrUnit);
-            Double vlrTot     = readDouble(r, iVlrTot);
+            Double qtdAtual = readDouble(r, iQtdAtual);
+            Double qtdEsperada = readDouble(r, iQtdEsperada);
+            Double qtdConferida = readDouble(r, iQtdConferida);
 
-            // 👇 Pega a quantidade ORIGINAL da memória (antes do corte)
-            Double qtdOriginal = conferenciaWorkflowService
-                    .getQtdOriginalItem(nunota, sequencia, qtdAtual);
+            Double vlrUnit = readDouble(r, iVlrUnit);
+            Double vlrTot = readDouble(r, iVlrTot);
 
-            // 🔥 LOG POR ITEM – agora mostrando qtdOriginal também
-            log.info(
-                    "DEBUG_ITEM_CONF nunota={} seq={} codProd={} | QTD_ORIGINAL={} QTD_ATUAL={} QTD_ESPERADA={} QTD_CONFERIDA={}",
-                    nunota, sequencia, codProd, qtdOriginal, qtdAtual, qtdEsperada, qtdConferida
+            Double qtdOriginal = conferenciaWorkflowService.getQtdOriginalItem(
+                    nunota,
+                    seq,
+                    qtdAtual
             );
 
-            if (nunota == null || st == null) {
-                continue;
-            }
-
-            // pega (ou cria) o pedido
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
                 pedido = new PedidoConferenciaDto(
@@ -240,63 +198,43 @@ public class PedidoConferenciaService {
                         numNota,
                         nomeParc,
                         st,
-                        codVendedor,
+                        codVend,
                         nomeVend,
-                        null,   // nomeConferente
-                        null    // avatarUrlConferente
+                        null,
+                        null
                 );
                 pedidosMap.put(nunota, pedido);
-            } else {
-                // garante preenchimento de campos caso venham nulos em algumas linhas
-                if (pedido.getNumNota() == null) {
-                    pedido.setNumNota(numNota);
-                }
-                if (pedido.getNomeParc() == null) {
-                    pedido.setNomeParc(nomeParc);
-                }
-                if (pedido.getCodVendedor() == null) {
-                    pedido.setCodVendedor(codVendedor);
-                }
-                if (pedido.getNomeVendedor() == null) {
-                    pedido.setNomeVendedor(nomeVend);
-                }
             }
 
-            // adiciona item com todas as quantidades
             pedido.addItem(new ItemConferenciaDto(
-                    sequencia,
+                    seq,
                     codProd,
-                    descricao,
-                    unidade,
+                    desc,
+                    un,
                     qtdAtual,
                     qtdEsperada,
                     qtdConferida,
                     vlrUnit,
                     vlrTot,
-                    qtdOriginal   // 👈 novo campo no DTO
+                    qtdOriginal
             ));
         }
 
-        List<PedidoConferenciaDto> listaFinal = new ArrayList<>(pedidosMap.values());
-        log.info("DEBUG_PEDIDOS_CONF: total de pedidos montados: {}", listaFinal.size());
-        return listaFinal;
+        return new ArrayList<>(pedidosMap.values());
     }
 
-    // ---------- helpers ----------
-
+    // ----------------- HELPERS -------------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
-        if (fieldsMetadata != null && fieldsMetadata.isArray()) {
-            for (JsonNode f : fieldsMetadata) {
-                cols.add(f.path("name").asText(""));
-            }
+        for (JsonNode n : fieldsMetadata) {
+            cols.add(n.path("name").asText());
         }
         return cols;
     }
 
     private static int indexOf(List<String> cols, String name) {
         for (int i = 0; i < cols.size(); i++) {
-            if (name.equalsIgnoreCase(cols.get(i))) return i;
+            if (cols.get(i).equalsIgnoreCase(name)) return i;
         }
         return -1;
     }
@@ -304,36 +242,33 @@ public class PedidoConferenciaService {
     private static String readText(JsonNode row, int idx) {
         if (idx < 0 || idx >= row.size()) return null;
         JsonNode v = row.get(idx);
-        return (v == null || v.isNull()) ? null : v.asText(null);
+        return v.isNull() ? null : v.asText();
     }
 
     private static Long readLong(JsonNode row, int idx) {
-        String s = readText(row, idx);
-        if (s == null || s.isBlank()) return null;
         try {
-            return Long.valueOf(s);
-        } catch (NumberFormatException e) {
-            return row.get(idx).asLong();
+            return row.get(idx).isNull() ? null :
+                    Long.valueOf(row.get(idx).asText().trim());
+        } catch (Exception e) {
+            return null;
         }
     }
 
     private static Integer readInt(JsonNode row, int idx) {
-        String s = readText(row, idx);
-        if (s == null || s.isBlank()) return null;
         try {
-            return Integer.valueOf(s);
-        } catch (NumberFormatException e) {
-            return row.get(idx).asInt();
+            return row.get(idx).isNull() ? null :
+                    Integer.valueOf(row.get(idx).asText().trim());
+        } catch (Exception e) {
+            return null;
         }
     }
 
     private static Double readDouble(JsonNode row, int idx) {
-        String s = readText(row, idx);
-        if (s == null || s.isBlank()) return null;
         try {
-            return Double.valueOf(s);
-        } catch (NumberFormatException e) {
-            return row.get(idx).asDouble();
+            return row.get(idx).isNull() ? null :
+                    Double.valueOf(row.get(idx).asText().replace(",", "."));
+        } catch (Exception e) {
+            return null;
         }
     }
 }
