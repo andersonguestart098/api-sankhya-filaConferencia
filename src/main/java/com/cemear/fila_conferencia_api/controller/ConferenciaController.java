@@ -146,6 +146,25 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
+    @PostMapping("/conferente")
+    public ResponseEntity<?> definirConferente(
+            @RequestBody Map<String, Object> req
+    ) {
+        Long nunota = Long.valueOf(req.get("nunota").toString());
+        String nome = req.get("nome").toString();
+        Integer codUsuario = Integer.valueOf(req.get("codUsuario").toString());
+
+        // ✅ ORDEM CORRETA
+        conferenciaWorkflowService.definirConferente(
+                nunota,
+                codUsuario,
+                nome
+        );
+
+        return ResponseEntity.ok().build();
+    }
+
+
     // ============================================================
     // 4) Finaliza conferência OK (sem divergência)
     // ============================================================

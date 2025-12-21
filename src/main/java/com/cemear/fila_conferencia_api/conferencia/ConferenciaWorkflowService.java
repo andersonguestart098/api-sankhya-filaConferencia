@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -29,6 +30,8 @@ public class ConferenciaWorkflowService {
     private final SankhyaGatewayClient gatewayClient;
     private final ObjectMapper objectMapper;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
+    private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
+
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
@@ -746,6 +749,32 @@ public class ConferenciaWorkflowService {
             return 0.0;
         }
     }
+
+    // ============================================================
+// DEFINIR CONFERENTE (persistência no Mongo)
+// ============================================================
+    public void definirConferente(Long nunota, Integer conferenteId, String conferenteNome) {
+        log.info("🧑‍💼 DEFINIR_CONFERENTE - nunota: {}, conferenteId: {}, conferenteNome: {}",
+                nunota, conferenteId, conferenteNome);
+
+        if (nunota == null) throw new IllegalArgumentException("nunota é obrigatório");
+        if (conferenteId == null) throw new IllegalArgumentException("conferenteId é obrigatório");
+        if (conferenteNome == null || conferenteNome.trim().isEmpty()) {
+            throw new IllegalArgumentException("conferenteNome é obrigatório");
+        }
+
+        pedidoConferenciaMongoService.definirConferente(
+                nunota,
+                conferenteId,
+                conferenteNome.trim()
+        );
+
+        log.info("✅ DEFINIR_CONFERENTE_OK - nunota: {}", nunota);
+    }
+
+
+
+
 
     // ----------------- HELPERS -----------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
