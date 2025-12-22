@@ -1,5 +1,7 @@
 package com.cemear.fila_conferencia_api.conferencia;
 
+import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaDoc;
+import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
 import com.cemear.fila_conferencia_api.sankhya.SankhyaGatewayClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -20,6 +22,9 @@ public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
+
+    // ✅ NOVO: serviço que consulta o Mongo para enriquecer o DTO
+    private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
 
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
     SELECT
@@ -78,7 +83,7 @@ public class PedidoConferenciaService {
             String status,
             LocalDate dataIni,
             LocalDate dataFim,
-            Long nunotaFiltro  // 👈 NOVO!
+            Long nunotaFiltro
     ) {
 
         // --------------------- FILTRO DE DATA E NUNOTA ------------------------
@@ -97,7 +102,7 @@ public class PedidoConferenciaService {
             """);
         }
 
-        // 🔍 FILTRO POR NUNOTA (NOVO!)
+        // 🔍 FILTRO POR NUNOTA
         if (nunotaFiltro != null) {
             filtroData.append(" AND CAB.NUNOTA = ").append(nunotaFiltro).append(" ");
             log.info("🔍 FILTRO NUNOTA ATIVO: {}", nunotaFiltro);
@@ -218,6 +223,33 @@ public class PedidoConferenciaService {
                     vlrTot,
                     qtdOriginal
             ));
+        }
+
+        // ============================================================
+        // ✅ ENRIQUECE NOME_CONFERENTE COM DADOS DO MONGO (SEM QUEBRAR)
+        // ============================================================
+        try {
+            List<Long> nunotas = new ArrayList<>(pedidosMap.keySet());
+            if (!nunotas.isEmpty()) {
+
+                var confMap = pedidoConferenciaMongoService.mapByNunota(nunotas);
+
+                for (Long nunota : nunotas) {
+                    PedidoConferenciaDto dto = pedidosMap.get(nunota);
+                    PedidoConferenciaDoc doc = confMap.get(nunota);
+
+                    if (dto != null
+                            && doc != null
+                            && doc.getConferenteNome() != null
+                            && !doc.getConferenteNome().trim().isEmpty()) {
+
+                        dto.setNomeConferente(doc.getConferenteNome().trim());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // ⚠️ importante: não derruba produção se Mongo falhar
+            log.warn("⚠️ Falha ao enriquecer conferente via Mongo. Mantendo payload original. Motivo={}", e.getMessage());
         }
 
         return new ArrayList<>(pedidosMap.values());
