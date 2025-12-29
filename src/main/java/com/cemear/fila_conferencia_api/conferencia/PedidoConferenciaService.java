@@ -34,6 +34,7 @@ public class PedidoConferenciaService {
         X.STATUS_CONFERENCIA,
         CAB.CODVEND,
         VEND.APELIDO AS NOME_VENDEDOR,
+        CAB.AD_RETIRA AS TIPO_ENTREGA,
 
         ITE.SEQUENCIA,
         ITE.CODPROD,
@@ -153,6 +154,9 @@ public class PedidoConferenciaService {
         int iCodVendedor = indexOf(cols, "CODVEND");
         int iNomeVendedor = indexOf(cols, "NOME_VENDEDOR");
 
+        // ✅ NOVO: campo que vem de CAB.AD_RETIRA AS TIPO_ENTREGA
+        int iTipoEntrega = indexOf(cols, "TIPO_ENTREGA");
+
         int iSeq = indexOf(cols, "SEQUENCIA");
         int iCodProd = indexOf(cols, "CODPROD");
         int iDescricao = indexOf(cols, "DESCRICAO");
@@ -176,6 +180,9 @@ public class PedidoConferenciaService {
             Long codVend = readLong(r, iCodVendedor);
             String nomeVend = readText(r, iNomeVendedor);
 
+            // ✅ NOVO: lê o valor do AD_RETIRA (alias TIPO_ENTREGA)
+            String tipoEntrega = readText(r, iTipoEntrega);
+
             Long numNota = readLong(r, iNumNota);
 
             Integer seq = readInt(r, iSeq);
@@ -198,6 +205,7 @@ public class PedidoConferenciaService {
 
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
+                // ✅ Ajustado: agora passa o tipoEntrega no DTO (campo adRetira)
                 pedido = new PedidoConferenciaDto(
                         nunota,
                         numNota,
@@ -205,6 +213,7 @@ public class PedidoConferenciaService {
                         st,
                         codVend,
                         nomeVend,
+                        tipoEntrega, // ✅ AQUI
                         null,
                         null
                 );

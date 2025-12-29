@@ -20,6 +20,9 @@ public class PedidoConferenciaDto {
     private Long codVendedor;         // CODVEND
     private String nomeVendedor;      // APELIDO / NOME VENDEDOR
 
+    // --------- CAMPO PERSONALIZADO DO SANKHYA (TGFCAB) ---------
+    private String adRetira;          // TGFCAB.AD_RETIRA (RETIRA / ENTREGA / TRANSPORTADORA)
+
     // --------- CAMPOS DO CONFERENTE (DASH / APP) ---------
     private String nomeConferente;       // nome de quem está conferindo
     private String avatarUrlConferente;  // URL do avatar (se tiver)
@@ -36,6 +39,7 @@ public class PedidoConferenciaDto {
                                 String statusConferencia,
                                 Long codVendedor,
                                 String nomeVendedor,
+                                String adRetira,
                                 String nomeConferente,
                                 String avatarUrlConferente) {
         this.nunota = nunota;
@@ -44,6 +48,7 @@ public class PedidoConferenciaDto {
         this.statusConferencia = statusConferencia;
         this.codVendedor = codVendedor;
         this.nomeVendedor = nomeVendedor;
+        this.adRetira = adRetira;
         this.nomeConferente = nomeConferente;
         this.avatarUrlConferente = avatarUrlConferente;
     }
@@ -57,7 +62,7 @@ public class PedidoConferenciaDto {
                                 String nomeParc,
                                 String statusConferencia) {
         this(nunota, numNota, nomeParc, statusConferencia,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     // ==============================
@@ -66,7 +71,7 @@ public class PedidoConferenciaDto {
     // ==============================
     public PedidoConferenciaDto(Long nunota, String statusConferencia) {
         this(nunota, null, null, statusConferencia,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     // helper pra ficar fácil adicionar item
