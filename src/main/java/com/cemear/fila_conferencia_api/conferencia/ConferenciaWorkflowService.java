@@ -4,15 +4,14 @@ import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest;
 import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest.ItemFinalizacaoDTO;
 import com.cemear.fila_conferencia_api.conferencia.mongo.ConferenciaItemMongoService;
 import com.cemear.fila_conferencia_api.conferencia.mongo.ItemConferenciaDoc;
+import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
 import com.cemear.fila_conferencia_api.sankhya.SankhyaGatewayClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -22,7 +21,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConferenciaWorkflowService {
@@ -31,7 +29,6 @@ public class ConferenciaWorkflowService {
     private final ObjectMapper objectMapper;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
-
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
@@ -136,20 +133,16 @@ public class ConferenciaWorkflowService {
         JsonNode rows = responseBody.path("rows");
 
         if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[conferenciaEstaFinalizadaOk] Nenhum cabeçalho encontrado. NUCONF={}", nuconf);
             return false;
         }
 
         List<String> cols = extractColumns(fieldsMetadata);
         int idxStatus = indexOf(cols, "STATUS");
         if (idxStatus < 0) {
-            log.warn("[conferenciaEstaFinalizadaOk] Coluna STATUS não encontrada no metadata. NUCONF={}", nuconf);
             return false;
         }
 
         String status = readText(rows.get(0), idxStatus);
-        log.info("[conferenciaEstaFinalizadaOk] NUCONF={} STATUS_LIDO={}", nuconf, status);
-
         return "F".equalsIgnoreCase(status);
     }
 
@@ -173,28 +166,23 @@ public class ConferenciaWorkflowService {
         JsonNode rows = responseBody.path("rows");
 
         if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[buscarNunotaOrigPorNuconf] Nenhum registro encontrado. NUCONF={}", nuconf);
             return null;
         }
 
         List<String> cols = extractColumns(fieldsMetadata);
         int idxNunotaOrig = indexOf(cols, "NUNOTAORIG");
         if (idxNunotaOrig < 0) {
-            log.warn("[buscarNunotaOrigPorNuconf] Coluna NUNOTAORIG não encontrada no metadata. NUCONF={}", nuconf);
             return null;
         }
 
         String nunotaStr = readText(rows.get(0), idxNunotaOrig);
         if (nunotaStr == null || nunotaStr.isBlank()) {
-            log.warn("[buscarNunotaOrigPorNuconf] NUNOTAORIG vazio. NUCONF={}", nuconf);
             return null;
         }
 
         try {
             return Long.valueOf(nunotaStr);
         } catch (NumberFormatException e) {
-            log.warn("[buscarNunotaOrigPorNuconf] Erro ao converter NUNOTAORIG='{}' para Long. NUCONF={}",
-                    nunotaStr, nuconf, e);
             return null;
         }
     }
@@ -211,14 +199,9 @@ public class ConferenciaWorkflowService {
     // ESTE MÉTODO SÓ AGE SE STATUS = 'F' EM TGFCON2.
     // ------------------------------------------------------
     public JsonNode preencherItensConferencia(Long nunotaOrig, Long nuconf) {
-        log.info("########## DEBUG_PREENCHE_ITENS nunotaOrig={} nuconf={} ##########",
-                nunotaOrig, nuconf);
 
         // 🔒 Segurança: só preenche itens se NUCONF estiver com STATUS = 'F'
         if (!conferenciaEstaFinalizadaOk(nuconf)) {
-            log.warn("preencherItensConferencia chamado para NUCONF={} com STATUS != 'F'. " +
-                    "Nenhum item será gravado em TGFCOI2.", nuconf);
-
             ObjectNode ignorado = objectMapper.createObjectNode();
             ignorado.put("status", "IGNORADO");
             ignorado.put("motivo", "Conferência não está finalizada OK (STATUS != 'F')");
@@ -240,16 +223,12 @@ public class ConferenciaWorkflowService {
             WHERE i.NUNOTA = %d
             """.formatted(nunotaOrig);
 
-        log.info("DEBUG_SQL_TGFITE nunotaOrig={} SQL:\n{}", nunotaOrig, sql);
-
         JsonNode root = gatewayClient.executeDbExplorer(sql);
         JsonNode responseBody = root.path("responseBody");
         JsonNode fieldsMetadata = responseBody.path("fieldsMetadata");
         JsonNode rowsNode = responseBody.path("rows");
 
         if (!rowsNode.isArray()) {
-            log.error("Resposta inesperada do DbExplorer ao preencher itens conferência: {}",
-                    root.toPrettyString());
             throw new IllegalStateException("DbExplorer não retornou array 'rows' na resposta.");
         }
 
@@ -294,8 +273,7 @@ public class ConferenciaWorkflowService {
                 try {
                     codProdInt = Integer.valueOf(codprodStr);
                 } catch (NumberFormatException e) {
-                    log.warn("Não consegui converter CODPROD para Integer. nunota={} seq={} codprod='{}'",
-                            nunotaOrig, seqInt, codprodStr);
+                    // mantém comportamento: ignora conversão
                 }
             }
 
@@ -304,10 +282,7 @@ public class ConferenciaWorkflowService {
                 try {
                     qtdOriginal = Double.valueOf(qtdneg);
                 } catch (NumberFormatException e) {
-                    log.warn(
-                            "Não consegui converter QTDNEG para Double. nunota={}, seq={}, qtdneg='{}'",
-                            nunotaOrig, seqInt, qtdneg
-                    );
+                    // mantém comportamento: ignora conversão
                 }
             }
 
@@ -322,8 +297,7 @@ public class ConferenciaWorkflowService {
                             null
                     );
                 } catch (Exception e) {
-                    log.warn("Falha ao registrar qtdOriginal no Mongo. nunota={} seq={}",
-                            nunotaOrig, seqInt, e);
+                    // mantém comportamento: ignora falha no mongo
                 }
             }
 
@@ -382,9 +356,6 @@ public class ConferenciaWorkflowService {
                 "NUCONF,SEQCONF,CODBARRA,CODPROD,CODVOL,CONTROLE,QTDCONFVOLPAD,QTDCONF,COPIA"
         );
 
-        log.info("DEBUG_SAVE_DETALHES_REQUEST nunota={} payload:\n{}",
-                nunotaOrig, rootReq.toPrettyString());
-
         return gatewayClient.callService(
                 "CRUDServiceProvider.saveRecord",
                 rootReq
@@ -433,20 +404,13 @@ public class ConferenciaWorkflowService {
     // 3) COPIA ITENS (TGFITE -> TGFCOI2) + REGISTRA NO MONGO
     // ---------------------------------
     public JsonNode finalizarConferenciaOkComItens(Long nuconf, Long codUsuario) {
-        log.info("#### FINALIZAR_OK_COM_ITENS nuconf={} codUsuario={} ####",
-                nuconf, codUsuario);
 
         // 1) Finaliza cabeçalho (STATUS = F)
         JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
-        log.info("FINALIZAR_OK_COM_ITENS - CabecalhoConferencia finalizado: {}",
-                respCabecalho != null ? "SUCESSO" : "FALHA");
 
         // 2) Buscar NUNOTAORIG na TGFCON2
         Long nunotaOrig = buscarNunotaOrigPorNuconf(nuconf);
         if (nunotaOrig == null) {
-            log.warn("FINALIZAR_OK_COM_ITENS - NUNOTAORIG não encontrado para NUCONF={}. " +
-                    "Somente cabeçalho foi finalizado, itens NÃO serão preenchidos.", nuconf);
-
             ObjectNode combinado = objectMapper.createObjectNode();
             combinado.set("cabecalhoConferencia", respCabecalho);
             combinado.put("nunotaOrig", (String) null);
@@ -457,8 +421,6 @@ public class ConferenciaWorkflowService {
 
         // 3) Preenche itens de conferência (agora STATUS já é F)
         JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
-        log.info("FINALIZAR_OK_COM_ITENS - DetalhesConferencia preenchidos: {}",
-                respDetalhes != null ? "SUCESSO" : "FALHA");
 
         // 4) Monta uma resposta combinada (opcional)
         ObjectNode combinado = objectMapper.createObjectNode();
@@ -483,26 +445,6 @@ public class ConferenciaWorkflowService {
         Long nunotaOrig = req.nunotaOrig();
         Long codUsuario = req.codUsuario();
         List<ItemFinalizacaoDTO> itens = req.itens();
-
-        try {
-            log.info(
-                    "\n################## DEBUG_FINALIZAR_DIVERGENTE_REQ ##################\n" +
-                            "nuconf={} nunotaOrig={} codUsuario={}\n" +
-                            "Total de itens: {}\n" +
-                            "PAYLOAD_COMPLETO:\n{}\n" +
-                            "###################################################################",
-                    nuconf, nunotaOrig, codUsuario,
-                    itens != null ? itens.size() : 0,
-                    objectMapper.writeValueAsString(req)
-            );
-        } catch (Exception e) {
-            log.warn("Não consegui serializar FinalizarDivergenteRequest para log", e);
-        }
-
-        // ⚠️ A PARTIR DAQUI: NÃO MEXE EM NENHUM ITEM.
-        // Nada de TGFCOI2, nada de TGFITE, nada de Mongo.
-        log.info("FINALIZAR_DIVERGENTE - Nenhum item será persistido em lugar nenhum. " +
-                "Somente retornando status OK para o app.");
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.put("status", "OK");
@@ -534,7 +476,6 @@ public class ConferenciaWorkflowService {
 
         for (ItemFinalizacaoDTO item : itens) {
             if (item.qtdConferida() == null) {
-                log.warn("DEBUG: qtdConferida null no TGFCOI2 - seq={}", item.sequencia());
                 continue;
             }
 
@@ -553,16 +494,7 @@ public class ConferenciaWorkflowService {
         ObjectNode fieldSet = entity.putObject("fieldSet");
         fieldSet.put("list", "NUCONF,SEQCONF,QTDCONF");
 
-        log.info(
-                "\n################## DEBUG_UPDATE_TGFCOI2 ##################\n" +
-                        "nuconf={} Itens a atualizar: {}\n" +
-                        "Payload:\n{}\n" +
-                        "#####################################################",
-                nuconf, dataRowArray.size(), root.toPrettyString()
-        );
-
-        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
-        log.info("✅ TGFCOI2_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
+        gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
 
     // atualiza TGFITE.QTDNEG e VLRTOT = VLRUNIT * qtdConferida
@@ -581,7 +513,6 @@ public class ConferenciaWorkflowService {
 
         for (ItemFinalizacaoDTO item : itens) {
             if (item.qtdConferida() == null) {
-                log.warn("DEBUG: qtdConferida null no TGFITE - seq={}", item.sequencia());
                 continue;
             }
 
@@ -590,21 +521,11 @@ public class ConferenciaWorkflowService {
             // 1) Buscar VLRUNIT do item na TGFITE
             double vlrUnit = buscarVlrUnitItem(nunotaOrig, item.sequencia(), item.codProd());
 
-            log.info(
-                    "[atualizarItensNotaComQuantidades] VLRUNIT encontrado. NUNOTA={}, SEQ={}, CODPROD={}, vlrUnit={}",
-                    nunotaOrig, item.sequencia(), item.codProd(), vlrUnit
-            );
-
             // 2) Calcular novo VLRTOT
             double novoVlrTot = vlrUnit * qtdConf;
 
             String qtdConfStr = String.format(Locale.US, "%.4f", qtdConf);
             String vlrTotStr = String.format(Locale.US, "%.2f", novoVlrTot);
-
-            log.info(
-                    "[atualizarItensNotaComQuantidades] Aplicando corte. NUNOTA={}, SEQ={}, CODPROD={}, novaQTDNEG={}, novoVLRTOT={}",
-                    nunotaOrig, item.sequencia(), item.codProd(), qtdConfStr, vlrTotStr
-            );
 
             ObjectNode row = dataRowArray.addObject();
             ObjectNode localFields = row.putObject("localFields");
@@ -621,16 +542,7 @@ public class ConferenciaWorkflowService {
         ObjectNode fieldSet = entity.putObject("fieldSet");
         fieldSet.put("list", "NUNOTA,SEQUENCIA,QTDNEG,VLRTOT");
 
-        log.info(
-                "\n################## DEBUG_UPDATE_TGFITE ##################\n" +
-                        "nunotaOrig={} Itens a atualizar: {}\n" +
-                        "Payload:\n{}\n" +
-                        "###################################################",
-                nunotaOrig, dataRowArray.size(), root.toPrettyString()
-        );
-
-        JsonNode response = gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
-        log.info("✅ TGFITE_ATUALIZADO - Resposta: {}", response != null ? "SUCESSO" : "FALHA");
+        gatewayClient.callService("CRUDServiceProvider.saveRecord", root);
     }
 
     // finaliza cabeçalho com STATUS = D (não usado no novo fluxo)
@@ -660,13 +572,6 @@ public class ConferenciaWorkflowService {
                 "NUCONF,NUNOTAORIG,STATUS,DHINICONF,DHFINCONF,CODUSUCONF"
         );
 
-        log.info(
-                "\n################## DEBUG_FINALIZA_CABECALHO ##################\n" +
-                        "nuconf={} PAYLOAD_FINALIZA_CABECALHO:\n{}\n" +
-                        "##########################################################",
-                nuconf, root.toPrettyString()
-        );
-
         return gatewayClient.callService(
                 "CRUDServiceProvider.saveRecord",
                 root
@@ -683,18 +588,7 @@ public class ConferenciaWorkflowService {
         return conferenciaItemMongoService
                 .buscar(nunota, sequencia)
                 .map(ItemConferenciaDoc::getQtdOriginal)
-                .map(q -> {
-                    log.info("DEBUG_QTD_ORIGINAL_GET_FOUND nunota={} seq={} qtdOriginal={}",
-                            nunota, sequencia, q);
-                    return q;
-                })
-                .orElseGet(() -> {
-                    log.info(
-                            "DEBUG_QTD_ORIGINAL_GET_NOT_FOUND nunota={} seq={} -> fallback={}",
-                            nunota, sequencia, fallbackQtdAtual
-                    );
-                    return fallbackQtdAtual;
-                });
+                .orElse(fallbackQtdAtual);
     }
 
     /**
@@ -714,16 +608,12 @@ public class ConferenciaWorkflowService {
         JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
 
         if (!rows.isArray() || rows.size() == 0) {
-            log.warn("[buscarVlrUnitItem] Nenhum item encontrado. NUNOTA={}, SEQ={}, CODPROD={}",
-                    nunotaOrig, sequencia, codProd);
             return 0.0;
         }
 
         List<String> cols = extractColumns(fieldsMetadata);
         int idxVlrUnit = indexOf(cols, "VLRUNIT");
         if (idxVlrUnit < 0) {
-            log.warn("[buscarVlrUnitItem] Coluna VLRUNIT não encontrada no metadata. NUNOTA={}, SEQ={}, CODPROD={}",
-                    nunotaOrig, sequencia, codProd);
             return 0.0;
         }
 
@@ -736,18 +626,14 @@ public class ConferenciaWorkflowService {
         try {
             return Double.parseDouble(vlrUnitStr);
         } catch (NumberFormatException e) {
-            log.error("[buscarVlrUnitItem] Erro ao converter VLRUNIT='{}' para double. NUNOTA={}, SEQ={}, CODPROD={}",
-                    vlrUnitStr, nunotaOrig, sequencia, codProd, e);
             return 0.0;
         }
     }
 
     // ============================================================
-// DEFINIR CONFERENTE (persistência no Mongo)
-// ============================================================
+    // DEFINIR CONFERENTE (persistência no Mongo)
+    // ============================================================
     public void definirConferente(Long nunota, Integer conferenteId, String conferenteNome) {
-        log.info("🧑‍💼 DEFINIR_CONFERENTE - nunota: {}, conferenteId: {}, conferenteNome: {}",
-                nunota, conferenteId, conferenteNome);
 
         if (nunota == null) throw new IllegalArgumentException("nunota é obrigatório");
         if (conferenteId == null) throw new IllegalArgumentException("conferenteId é obrigatório");
@@ -760,13 +646,7 @@ public class ConferenciaWorkflowService {
                 conferenteId,
                 conferenteNome.trim()
         );
-
-        log.info("✅ DEFINIR_CONFERENTE_OK - nunota: {}", nunota);
     }
-
-
-
-
 
     // ----------------- HELPERS -----------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
