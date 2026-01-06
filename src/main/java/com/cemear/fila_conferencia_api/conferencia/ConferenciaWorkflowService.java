@@ -675,16 +675,8 @@ public class ConferenciaWorkflowService {
 
     // ----------------- API para o PedidoConferenciaService -----------------
     public Double getQtdOriginalItem(Long nunota, Integer sequencia, Double fallbackQtdAtual) {
-        log.info(
-                "DEBUG_QTD_ORIGINAL_GET_IN nunota={} seq={} fallbackQtdAtual={}",
-                nunota, sequencia, fallbackQtdAtual
-        );
 
         if (nunota == null || sequencia == null) {
-            log.info(
-                    "DEBUG_QTD_ORIGINAL_GET_NULL_KEYS nunota={} seq={} -> fallback={}",
-                    nunota, sequencia, fallbackQtdAtual
-            );
             return fallbackQtdAtual;
         }
 

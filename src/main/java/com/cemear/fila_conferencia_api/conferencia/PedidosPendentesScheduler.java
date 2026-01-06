@@ -23,19 +23,24 @@ public class PedidosPendentesScheduler {
 
     private final PedidoConferenciaService pedidoConferenciaService;
 
+    // ✅ se não quiser push, pode manter injetado mas desligar via flag
     private final PushService pushService;
     private final UsuarioRepository usuarioRepository;
 
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
-
     private final SseHub sseHub;
 
-    private Set<Long> ultimoSnapshot = new HashSet<>();
+    // snapshot local: usado só para detectar "novo pedido" (AC/R)
+    private Set<Long> ultimoSnapshotAcR = new HashSet<>();
 
+    // cache de usuários (push)
     private volatile List<Usuario> usuariosCache = List.of();
     private volatile long usuariosCacheAtMs = 0;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+
+    // ✅ flag simples (pode virar @Value("${...}") depois)
+    private static final boolean ENABLE_PUSH = false;
 
     @Scheduled(fixedDelay = 2000)
     public void verificarPedidosPendentes() {
@@ -44,68 +49,84 @@ public class PedidosPendentesScheduler {
             return;
         }
 
-        long t0 = System.currentTimeMillis();
+        final long t0 = System.currentTimeMillis();
+
+        int total = 0;
+        int changed = 0;
+        int initial = 0;
+        int novos = 0;
 
         try {
-            long tList0 = System.currentTimeMillis();
+            // ============================================================
+            // 1) Buscar pendentes (gargalo #1)
+            // ============================================================
+            final long tList0 = System.currentTimeMillis();
             List<PedidoConferenciaDto> pendentes = pedidoConferenciaService.listarPendentes();
-            long tList1 = System.currentTimeMillis();
+            final long tListMs = System.currentTimeMillis() - tList0;
 
-            int total = (pendentes == null) ? 0 : pendentes.size();
-            log.info("[SCHED] listarPendentes={}ms total={}", (tList1 - tList0), total);
+            total = (pendentes == null) ? 0 : pendentes.size();
+            log.info("[SCHED] listarPendentes={}ms total={}", tListMs, total);
 
             if (pendentes == null || pendentes.isEmpty()) {
                 return;
             }
 
             // ============================================================
-            // 1) PUSH: detectar "novos pedidos" (AC/R) com snapshot local
+            // 2) PUSH (opcional) - detecta novos AC/R, mas NÃO pode travar SSE
             // ============================================================
-            long tPush0 = System.currentTimeMillis();
+            if (ENABLE_PUSH) {
+                final long tPush0 = System.currentTimeMillis();
 
-            Set<Long> atualAcR = new HashSet<>();
-            for (PedidoConferenciaDto p : pendentes) {
-                Long nunota = p.getNunota();
-                String status = p.getStatusConferencia();
-
-                if (nunota != null && ("AC".equals(status) || "R".equals(status))) {
-                    atualAcR.add(nunota);
+                Set<Long> atualAcR = new HashSet<>();
+                for (PedidoConferenciaDto p : pendentes) {
+                    Long nunota = p.getNunota();
+                    String status = p.getStatusConferencia();
+                    if (nunota != null && ("AC".equals(status) || "R".equals(status))) {
+                        atualAcR.add(nunota);
+                    }
                 }
-            }
 
-            Set<Long> novos = new HashSet<>(atualAcR);
-            novos.removeAll(ultimoSnapshot);
+                Set<Long> novosSet = new HashSet<>(atualAcR);
+                novosSet.removeAll(ultimoSnapshotAcR);
+                novos = novosSet.size();
 
-            if (!novos.isEmpty()) {
-                log.info("Novos pedidos (STATUS AC/R) encontrados: {}", novos);
+                // atualiza snapshot cedo (mesmo que push falhe)
+                ultimoSnapshotAcR = atualAcR;
 
-                List<Usuario> usuarios = getUsuariosComCache();
+                if (!novosSet.isEmpty()) {
+                    List<Usuario> usuarios = getUsuariosComCache();
 
-                for (Long nunota : novos) {
-                    String titulo = "Novo pedido na fila";
-                    String corpo  = "Pedido " + nunota + " aguardando conferência";
+                    // ✅ não deixa 1 push ruim travar o loop inteiro
+                    for (Long nunota : novosSet) {
+                        String titulo = "Novo pedido na fila";
+                        String corpo  = "Pedido " + nunota + " aguardando conferência";
 
-                    for (Usuario u : usuarios) {
-                        String token = u.getPushToken();
-                        if (token != null && !token.isBlank()) {
-                            pushService.enviarPush(token, titulo, corpo);
+                        for (Usuario u : usuarios) {
+                            String token = u.getPushToken();
+                            if (token == null || token.isBlank()) continue;
+
+                            try {
+                                pushService.enviarPush(token, titulo, corpo);
+                            } catch (Exception ex) {
+                                log.warn("[SCHED] push failed token={} nunota={} err={}",
+                                        token.substring(0, Math.min(8, token.length())),
+                                        nunota,
+                                        ex.getMessage());
+                            }
                         }
                     }
                 }
+
+                final long tPushMs = System.currentTimeMillis() - tPush0;
+                log.info("[SCHED] pushBlock={}ms novos={}", tPushMs, novos);
             }
 
-            ultimoSnapshot = atualAcR;
-
-            long tPush1 = System.currentTimeMillis();
-            log.info("[SCHED] pushBlock={}ms novos={}", (tPush1 - tPush0), novos.size());
-
             // ============================================================
-            // 2) SSE + Mongo: detectar mudança de status por NUNOTA
+            // 3) SSE + Mongo diff (gargalo #2 pode ser mongo + upsert)
             // ============================================================
 
-            long tMongo0 = System.currentTimeMillis();
-
-            List<Long> nunotas = pendentes.stream()
+            // lista de nunotas
+            final List<Long> nunotas = pendentes.stream()
                     .map(PedidoConferenciaDto::getNunota)
                     .filter(Objects::nonNull)
                     .distinct()
@@ -113,15 +134,14 @@ public class PedidosPendentesScheduler {
 
             if (nunotas.isEmpty()) return;
 
-            Map<Long, PedidoConferenciaDoc> mongoMap =
-                    pedidoConferenciaMongoService.mapByNunota(nunotas);
+            // lookup em lote
+            final long tMongo0 = System.currentTimeMillis();
+            Map<Long, PedidoConferenciaDoc> mongoMap = pedidoConferenciaMongoService.mapByNunota(nunotas);
+            final long tMongoMs = System.currentTimeMillis() - tMongo0;
+            log.info("[SCHED] mongoMapByNunota={}ms nunotas={}", tMongoMs, nunotas.size());
 
-            long tMongo1 = System.currentTimeMillis();
-            log.info("[SCHED] mongoMapByNunota={}ms nunotas={}", (tMongo1 - tMongo0), nunotas.size());
-
-            long tLoop0 = System.currentTimeMillis();
-            int changed = 0;
-            int initial = 0;
+            // loop diff
+            final long tLoop0 = System.currentTimeMillis();
 
             for (PedidoConferenciaDto p : pendentes) {
                 Long nunota = p.getNunota();
@@ -133,7 +153,7 @@ public class PedidosPendentesScheduler {
                 PedidoConferenciaDoc doc = mongoMap.get(nunota);
                 String statusAnterior = (doc != null) ? doc.getLastStatusConferencia() : null;
 
-                // ✅ primeiro status visto: grava e EMITE (resolve “perdi A”)
+                // ✅ primeira vez vista: grava e EMITE "initial" (não perder transições)
                 if (statusAnterior == null) {
                     pedidoConferenciaMongoService.upsertLastStatusConferencia(nunota, statusAtual);
 
@@ -145,7 +165,6 @@ public class PedidosPendentesScheduler {
                     );
 
                     initial++;
-                    log.info("STATUS_INITIAL nunota={} status={}", nunota, statusAtual);
                     sseHub.broadcast("pedido_status_changed", payload);
                     continue;
                 }
@@ -160,19 +179,19 @@ public class PedidosPendentesScheduler {
                     );
 
                     changed++;
-                    log.info("STATUS_CHANGED nunota={} {} -> {}", nunota, statusAnterior, statusAtual);
                     sseHub.broadcast("pedido_status_changed", payload);
                 }
             }
 
-            long tLoop1 = System.currentTimeMillis();
-            log.info("[SCHED] loopEmit={}ms changed={} initial={}", (tLoop1 - tLoop0), changed, initial);
+            final long tLoopMs = System.currentTimeMillis() - tLoop0;
+            log.info("[SCHED] loopEmit={}ms changed={} initial={}", tLoopMs, changed, initial);
 
         } catch (Exception e) {
-            log.error("Erro no scheduler de pedidos pendentes: {}", e.getMessage(), e);
+            log.error("[SCHED] error: {}", e.getMessage(), e);
         } finally {
-            long t1 = System.currentTimeMillis();
-            log.info("[SCHED] total={}ms", (t1 - t0));
+            final long totalMs = System.currentTimeMillis() - t0;
+            log.info("[SCHED] total={}ms totalPendentes={} changed={} initial={} novos={}",
+                    totalMs, total, changed, initial, novos);
             running.set(false);
         }
     }
@@ -182,7 +201,6 @@ public class PedidosPendentesScheduler {
         if ((now - usuariosCacheAtMs) < 60_000 && usuariosCache != null && !usuariosCache.isEmpty()) {
             return usuariosCache;
         }
-
         List<Usuario> usuarios = usuarioRepository.findAll();
         usuariosCache = usuarios;
         usuariosCacheAtMs = now;
