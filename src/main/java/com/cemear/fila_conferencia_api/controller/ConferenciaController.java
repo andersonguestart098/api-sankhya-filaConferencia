@@ -17,6 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.cemear.fila_conferencia_api.conferencia.sse.SseHub;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -32,6 +35,12 @@ public class ConferenciaController {
     private final PedidoConferenciaService pedidoConferenciaService;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
+    private final SseHub sseHub;
+
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream() {
+        return sseHub.addClient();
+    }
 
     // ============================================================
     // 1) Lista pedidos pendentes (paginado + filtros + NUNOTA)

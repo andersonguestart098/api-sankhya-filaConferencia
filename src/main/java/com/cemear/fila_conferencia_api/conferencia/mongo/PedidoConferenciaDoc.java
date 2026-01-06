@@ -2,6 +2,7 @@ package com.cemear.fila_conferencia_api.conferencia.mongo;
 
 import lombok.Data;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -13,6 +14,7 @@ public class PedidoConferenciaDoc {
     @Id
     private String id;
 
+    @Indexed(unique = true)
     private Long nunota;
 
     private Integer conferenteId;
@@ -20,4 +22,8 @@ public class PedidoConferenciaDoc {
 
     private Instant createdAt;
     private Instant updatedAt;
+
+    private String lastStatusConferencia;
+    private Instant lastStatusUpdatedAt;
+
 }

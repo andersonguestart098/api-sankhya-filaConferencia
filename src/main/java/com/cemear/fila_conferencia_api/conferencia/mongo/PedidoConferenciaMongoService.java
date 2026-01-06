@@ -18,7 +18,7 @@ public class PedidoConferenciaMongoService {
     private final PedidoConferenciaRepository repo;
 
     // ============================================================
-    // DEFINIR CONFERENTE (já existia – mantém igual)
+    // DEFINIR CONFERENTE (mantém igual)
     // ============================================================
     public void definirConferente(
             Long nunota,
@@ -34,8 +34,10 @@ public class PedidoConferenciaMongoService {
                 .findByNunota(nunota)
                 .orElseGet(() -> {
                     PedidoConferenciaDoc novo = new PedidoConferenciaDoc();
+                    Instant now = Instant.now();
                     novo.setNunota(nunota);
-                    novo.setCreatedAt(Instant.now());
+                    novo.setCreatedAt(now);
+                    novo.setUpdatedAt(now);
                     return novo;
                 });
 
@@ -47,7 +49,7 @@ public class PedidoConferenciaMongoService {
     }
 
     // ============================================================
-    // BUSCA EM LOTE (NÃO QUEBRA NADA)
+    // BUSCA EM LOTE (mantém igual)
     // ============================================================
     public Map<Long, PedidoConferenciaDoc> mapByNunota(List<Long> nunotas) {
         if (nunotas == null || nunotas.isEmpty()) {
@@ -61,5 +63,35 @@ public class PedidoConferenciaMongoService {
                         Function.identity(),
                         (a, b) -> a
                 ));
+    }
+
+    // ============================================================
+    // ✅ STATUS: pegar último status salvo
+    // ============================================================
+    public String getLastStatusConferencia(Long nunota) {
+        return repo.findByNunota(nunota)
+                .map(PedidoConferenciaDoc::getLastStatusConferencia)
+                .orElse(null);
+    }
+
+    // ============================================================
+    // ✅ STATUS: upsert do último status salvo
+    // ============================================================
+    public PedidoConferenciaDoc upsertLastStatusConferencia(Long nunota, String status) {
+        Instant now = Instant.now();
+
+        PedidoConferenciaDoc doc = repo.findByNunota(nunota)
+                .orElseGet(() -> {
+                    PedidoConferenciaDoc novo = new PedidoConferenciaDoc();
+                    novo.setNunota(nunota);
+                    novo.setCreatedAt(now);
+                    return novo;
+                });
+
+        doc.setLastStatusConferencia(status);
+        doc.setLastStatusUpdatedAt(now);
+        doc.setUpdatedAt(now);
+
+        return repo.save(doc);
     }
 }
