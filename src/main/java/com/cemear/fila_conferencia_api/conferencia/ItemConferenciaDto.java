@@ -17,6 +17,7 @@ public class ItemConferenciaDto {
     private Double qtdEsperada;   // TGFCOI2.QTDCONFVOLPAD (antes do corte)
     private Double qtdConferida;  // TGFCOI2.QTDCONF (digitado no app)
     private Double qtdOriginal;
+    private Double estoqueDisponivel;
 
 
     // Valores
@@ -34,7 +35,8 @@ public class ItemConferenciaDto {
             Double qtdConferida,
             Double vlrUnit,
             Double vlrTot,
-            Double qtdOriginal   // 👈 novo
+            Double qtdOriginal,
+            Double estoqueDisponivel
     )
     {
         this.sequencia = sequencia;
@@ -47,5 +49,6 @@ public class ItemConferenciaDto {
         this.vlrUnit = vlrUnit;
         this.vlrTot = vlrTot;
         this.qtdOriginal = qtdOriginal;
+        this.estoqueDisponivel = estoqueDisponivel;
     }
 }

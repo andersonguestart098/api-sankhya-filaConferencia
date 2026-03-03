@@ -27,48 +27,70 @@ public class PedidoConferenciaService {
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
 
     private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
-    SELECT
-        X.NUNOTA,
-        CAB.NUMNOTA,
-        PAR.NOMEPARC,
-        X.STATUS_CONFERENCIA,
-        CAB.CODVEND,
-        VEND.APELIDO AS NOME_VENDEDOR,
-        CAB.AD_RETIRA AS TIPO_ENTREGA,
-
-        ITE.SEQUENCIA,
-        ITE.CODPROD,
-        PRO.DESCRPROD            AS DESCRICAO,
-        ITE.CODVOL               AS UNIDADE,
-        ITE.QTDNEG               AS QTD_ATUAL,
-
-        COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
-        COI.QTDCONF              AS QTD_CONFERIDA,
-
-        ITE.VLRUNIT,
-        ITE.VLRTOT
-    FROM (
-        SELECT
-            CAB.NUNOTA,
-            CAB.CODPARC,
-            SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
-            ROW_NUMBER() OVER (ORDER BY CAB.NUNOTA DESC) AS RN
-        FROM TGFCAB CAB
-        WHERE 1 = 1
-          %s   -- filtro data + nunota
-    ) X
-    JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
-    JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
-    JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
-    JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
-    LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
-    LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
-
-    WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
-      %s   -- filtro status
-      %s   -- paginação
-
-    ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
+            SELECT
+                X.NUNOTA,
+                CAB.NUMNOTA,
+                PAR.NOMEPARC,
+                X.STATUS_CONFERENCIA,
+                CAB.CODVEND,
+                VEND.APELIDO AS NOME_VENDEDOR,
+                CAB.AD_RETIRA AS TIPO_ENTREGA,
+            
+                ITE.SEQUENCIA,
+                ITE.CODPROD,
+                PRO.DESCRPROD            AS DESCRICAO,
+                ITE.CODVOL               AS UNIDADE,
+                ITE.QTDNEG               AS QTD_ATUAL,
+            
+                COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
+                COI.QTDCONF              AS QTD_CONFERIDA,
+            
+                ITE.VLRUNIT,
+                ITE.VLRTOT,
+            
+                -- ✅ NOVO: estoque disponível
+                NVL(EST.ESTOQUE_TOTAL, 0) AS ESTOQUE_TOTAL,
+                NVL(EST.RESERVADO, 0)     AS ESTOQUE_RESERVADO,
+                (NVL(EST.ESTOQUE_TOTAL,0) - NVL(EST.RESERVADO,0)) AS ESTOQUE_DISP
+            
+            FROM (
+                ...
+            ) X
+            JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
+            JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
+            JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
+            JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
+            LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
+            LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
+            
+            -- ✅ NOVO: subquery da TGFEST (agrega pra não duplicar linha)
+            LEFT JOIN (
+                SELECT
+                    E.CODEMP,
+                    E.CODLOCAL,
+                    E.CODPROD,
+                    NVL(E.CONTROLE,'') AS CONTROLE,
+                    SUM(NVL(E.ESTOQUE,0))   AS ESTOQUE_TOTAL,
+                    SUM(NVL(E.RESERVADO,0)) AS RESERVADO
+                FROM TGFEST E
+                GROUP BY
+                    E.CODEMP, E.CODLOCAL, E.CODPROD, NVL(E.CONTROLE,'')
+            ) EST
+                ON EST.CODEMP  = CAB.CODEMP
+               AND EST.CODPROD = ITE.CODPROD
+               AND EST.CONTROLE = NVL(ITE.CONTROLE,'')
+               AND EST.CODLOCAL = (
+                    -- ✅ escolha UM destes conforme teu cenário:
+                    -- 1) se o local do item existir:
+                    NVL(ITE.CODLOCALORIG, CAB.CODLOCAL)
+                    -- 2) ou se teu pedido sempre considerar um local fixo, troca por um número:
+                    -- 101
+               )
+            
+            WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
+              %s
+              %s
+            ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
     """;
 
     public List<PedidoConferenciaDto> listarPendentes() {
@@ -169,6 +191,10 @@ public class PedidoConferenciaService {
         int iVlrUnit = indexOf(cols, "VLRUNIT");
         int iVlrTot = indexOf(cols, "VLRTOT");
 
+        int iEstoqueDisp = indexOf(cols, "ESTOQUE_DISP");
+        int iEstoqueTot  = indexOf(cols, "ESTOQUE_TOTAL");
+        int iReservado   = indexOf(cols, "ESTOQUE_RESERVADO");
+
         LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
 
         for (JsonNode r : rows) {
@@ -203,9 +229,12 @@ public class PedidoConferenciaService {
                     qtdAtual
             );
 
+            Double estoqueDisp = readDouble(r, iEstoqueDisp);
+            Double estoqueTot  = readDouble(r, iEstoqueTot);
+            Double reservado   = readDouble(r, iReservado);
+
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
-                // ✅ Ajustado: agora passa o tipoEntrega no DTO (campo adRetira)
                 pedido = new PedidoConferenciaDto(
                         nunota,
                         numNota,
@@ -230,7 +259,8 @@ public class PedidoConferenciaService {
                     qtdConferida,
                     vlrUnit,
                     vlrTot,
-                    qtdOriginal
+                    qtdOriginal,
+                    estoqueDisp
             ));
         }
 
