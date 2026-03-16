@@ -1,4 +1,3 @@
-// src/main/java/com/cemear/fila_conferencia_api/controller/ConferenciaController.java
 package com.cemear.fila_conferencia_api.controller;
 
 import com.cemear.fila_conferencia_api.auth.dto.FinalizarDivergenteRequest;
@@ -46,29 +45,38 @@ public class ConferenciaController {
     // 1) Lista pedidos pendentes (paginado + filtros + NUNOTA)
     // ============================================================
     @GetMapping("/pedidos-pendentes")
-    public List<PedidoConferenciaDto> listarPendentes(
+    public ResponseEntity<Map<String, Object>> listarPendentes(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "100") int pageSize, // 🔥 agora 100 por página (alinhado com o app)
+            @RequestParam(defaultValue = "100") int pageSize,
             @RequestParam(required = false) String status,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataIni,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataFim,
-            @RequestParam(required = false) Long nunota // 🔎 novo filtro por NUNOTA
+            @RequestParam(required = false) Long nunota
     ) {
         log.info(
                 "LISTAR_PENDENTES page={}, pageSize={}, status={}, dataIni={}, dataFim={}, nunota={}",
                 page, pageSize, status, dataIni, dataFim, nunota
         );
 
-        return pedidoConferenciaService.listarPendentesPaginado(
+        List<PedidoConferenciaDto> pedidos = pedidoConferenciaService.listarPendentesPaginado(
                 page,
                 pageSize,
                 status,
                 dataIni,
                 dataFim,
-                nunota // 👈 repassa pro service
+                nunota
         );
+
+        log.info("Retornando {} pedidos com estoque", pedidos.size());
+
+        return ResponseEntity.ok(Map.of(
+                "pedidos", pedidos,
+                "total", pedidos.size(),
+                "page", page,
+                "pageSize", pageSize
+        ));
     }
 
     // ============================================================

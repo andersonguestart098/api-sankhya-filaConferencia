@@ -9,24 +9,26 @@ public class ItemConferenciaDto {
 
     private Integer sequencia;
     private Long codProd;
+    private Long codGrupoProd;
     private String descricao;
     private String unidade;
 
     // Quantidades
-    private Double qtdAtual;      // TGFITE.QTDNEG (depois do corte)
-    private Double qtdEsperada;   // TGFCOI2.QTDCONFVOLPAD (antes do corte)
-    private Double qtdConferida;  // TGFCOI2.QTDCONF (digitado no app)
+    private Double qtdAtual;      // TGFITE.QTDNEG
+    private Double qtdEsperada;   // TGFCOI2.QTDCONFVOLPAD
+    private Double qtdConferida;  // TGFCOI2.QTDCONF
     private Double qtdOriginal;
-
+    private Double estoqueDisponivel;
 
     // Valores
     private Double vlrUnit;
     private Double vlrTot;
 
-    // 👇 construtor “completão” usado no PedidoConferenciaService
+    // ✅ Construtor SEM estoque
     public ItemConferenciaDto(
             Integer sequencia,
             Long codProd,
+            Long codGrupoProd,
             String descricao,
             String unidade,
             Double qtdAtual,
@@ -34,11 +36,42 @@ public class ItemConferenciaDto {
             Double qtdConferida,
             Double vlrUnit,
             Double vlrTot,
-            Double qtdOriginal   // 👈 novo
-    )
-    {
+            Double qtdOriginal
+    ) {
+        this(
+                sequencia,
+                codProd,
+                codGrupoProd,
+                descricao,
+                unidade,
+                qtdAtual,
+                qtdEsperada,
+                qtdConferida,
+                vlrUnit,
+                vlrTot,
+                qtdOriginal,
+                null
+        );
+    }
+
+    // ✅ Construtor COM estoque
+    public ItemConferenciaDto(
+            Integer sequencia,
+            Long codProd,
+            Long codGrupoProd,
+            String descricao,
+            String unidade,
+            Double qtdAtual,
+            Double qtdEsperada,
+            Double qtdConferida,
+            Double vlrUnit,
+            Double vlrTot,
+            Double qtdOriginal,
+            Double estoqueDisponivel
+    ) {
         this.sequencia = sequencia;
         this.codProd = codProd;
+        this.codGrupoProd = codGrupoProd;
         this.descricao = descricao;
         this.unidade = unidade;
         this.qtdAtual = qtdAtual;
@@ -47,5 +80,6 @@ public class ItemConferenciaDto {
         this.vlrUnit = vlrUnit;
         this.vlrTot = vlrTot;
         this.qtdOriginal = qtdOriginal;
+        this.estoqueDisponivel = estoqueDisponivel;
     }
 }

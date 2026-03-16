@@ -26,57 +26,75 @@ public class PedidoConferenciaService {
     // ✅ NOVO: serviço que consulta o Mongo para enriquecer o DTO
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
 
-    private static final String SQL_PEDIDOS_PAGINADO_TEMPLATE = """
+// =====================================================
+// ✅ QUERY COM ESTOQUE CORRIGIDA - Agrega os valores de estoque
+// =====================================================
+private static final String SQL_PEDIDOS_PAGINADO_COM_ESTOQUE_TEMPLATE = """
+SELECT
+    X.NUNOTA,
+    CAB.NUMNOTA,
+    PAR.NOMEPARC,
+    X.STATUS_CONFERENCIA,
+    CAB.CODVEND,
+    VEND.APELIDO AS NOME_VENDEDOR,
+    CAB.AD_RETIRA AS TIPO_ENTREGA,
+
+    ITE.SEQUENCIA,
+    ITE.CODPROD,
+    PRO.CODGRUPOPROD         AS CODGRUPOPROD,
+    PRO.DESCRPROD            AS DESCRICAO,
+    ITE.CODVOL               AS UNIDADE,
+    ITE.QTDNEG               AS QTD_ATUAL,
+
+    COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
+    COI.QTDCONF              AS QTD_CONFERIDA,
+
+    ITE.VLRUNIT,
+    ITE.VLRTOT,
+
+    NVL(EST_AGREGADO.ESTOQUE_TOTAL, 0) AS ESTOQUE_TOTAL,
+    NVL(EST_AGREGADO.RESERVADO_TOTAL, 0) AS ESTOQUE_RESERVADO,
+    NVL(EST_AGREGADO.ESTOQUE_TOTAL, 0) - NVL(EST_AGREGADO.RESERVADO_TOTAL, 0) AS ESTOQUE_DISP
+FROM (
     SELECT
-        X.NUNOTA,
-        CAB.NUMNOTA,
-        PAR.NOMEPARC,
-        X.STATUS_CONFERENCIA,
-        CAB.CODVEND,
-        VEND.APELIDO AS NOME_VENDEDOR,
-        CAB.AD_RETIRA AS TIPO_ENTREGA,
+        CAB.NUNOTA,
+        CAB.CODPARC,
+        SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
+        ROW_NUMBER() OVER (ORDER BY CAB.NUNOTA DESC) AS RN
+    FROM TGFCAB CAB
+    WHERE 1 = 1
+      %s
+) X
+JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
+JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
+JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
+JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
+LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
+LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
 
-        ITE.SEQUENCIA,
-        ITE.CODPROD,
-        PRO.DESCRPROD            AS DESCRICAO,
-        ITE.CODVOL               AS UNIDADE,
-        ITE.QTDNEG               AS QTD_ATUAL,
+LEFT JOIN (
+    SELECT 
+        EST.CODPROD,
+        EST.CODEMP,
+        SUM(NVL(EST.ESTOQUE, 0)) AS ESTOQUE_TOTAL,
+        SUM(NVL(EST.RESERVADO, 0)) AS RESERVADO_TOTAL
+    FROM TGFEST EST
+    GROUP BY EST.CODPROD, EST.CODEMP
+) EST_AGREGADO ON EST_AGREGADO.CODPROD = ITE.CODPROD 
+               AND EST_AGREGADO.CODEMP = CAB.CODEMP
 
-        COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
-        COI.QTDCONF              AS QTD_CONFERIDA,
-
-        ITE.VLRUNIT,
-        ITE.VLRTOT
-    FROM (
-        SELECT
-            CAB.NUNOTA,
-            CAB.CODPARC,
-            SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
-            ROW_NUMBER() OVER (ORDER BY CAB.NUNOTA DESC) AS RN
-        FROM TGFCAB CAB
-        WHERE 1 = 1
-          %s   -- filtro data + nunota
-    ) X
-    JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
-    JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
-    JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
-    JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
-    LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
-    LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
-
-    WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
-      %s   -- filtro status
-      %s   -- paginação
-
-    ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
-    """;
+WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
+  %s
+  %s
+ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
+""";
 
     public List<PedidoConferenciaDto> listarPendentes() {
         return listarPendentesPaginado(0, 0, null, null, null, null);
     }
 
     /**
-     * AGORA ACEITA NUNOTA! (6 parâmetros)
+     * AGORA ACEITA NUNOTA E TRAZ ESTOQUE! (6 parâmetros)
      */
     public List<PedidoConferenciaDto> listarPendentesPaginado(
             int page,
@@ -127,13 +145,13 @@ public class PedidoConferenciaService {
 
         // --------------------- MONTA SQL FINAL ------------------------
         String sql = String.format(
-                SQL_PEDIDOS_PAGINADO_TEMPLATE,
+                SQL_PEDIDOS_PAGINADO_COM_ESTOQUE_TEMPLATE,
                 filtroData,
                 filtroStatusSql,
                 trechoPaginacaoSql
         );
 
-        log.info("SQL FINAL GERADO:\n{}", sql);
+        log.info("SQL FINAL GERADO (COM ESTOQUE):\n{}", sql);
 
         // --------------------- EXECUÇÃO ------------------------
         JsonNode root = gatewayClient.executeDbExplorer(sql);
@@ -147,18 +165,18 @@ public class PedidoConferenciaService {
         ArrayNode rows = (ArrayNode) rowsNode;
         List<String> cols = extractColumns(fieldsMetadata);
 
+        // Mapeamento dos índices das colunas
         int iNunota = indexOf(cols, "NUNOTA");
         int iNumNota = indexOf(cols, "NUMNOTA");
         int iNomeParc = indexOf(cols, "NOMEPARC");
         int iStatus = indexOf(cols, "STATUS_CONFERENCIA");
         int iCodVendedor = indexOf(cols, "CODVEND");
         int iNomeVendedor = indexOf(cols, "NOME_VENDEDOR");
-
-        // ✅ NOVO: campo que vem de CAB.AD_RETIRA AS TIPO_ENTREGA
         int iTipoEntrega = indexOf(cols, "TIPO_ENTREGA");
 
         int iSeq = indexOf(cols, "SEQUENCIA");
         int iCodProd = indexOf(cols, "CODPROD");
+        int iCodGrupoProd = indexOf(cols, "CODGRUPOPROD");
         int iDescricao = indexOf(cols, "DESCRICAO");
         int iUnidade = indexOf(cols, "UNIDADE");
 
@@ -168,6 +186,11 @@ public class PedidoConferenciaService {
 
         int iVlrUnit = indexOf(cols, "VLRUNIT");
         int iVlrTot = indexOf(cols, "VLRTOT");
+
+        // ✅ NOVOS ÍNDICES PARA ESTOQUE
+        int iEstoqueTotal = indexOf(cols, "ESTOQUE_TOTAL");
+        int iEstoqueReservado = indexOf(cols, "ESTOQUE_RESERVADO");
+        int iEstoqueDisp = indexOf(cols, "ESTOQUE_DISP");
 
         LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
 
@@ -179,14 +202,12 @@ public class PedidoConferenciaService {
             String st = readText(r, iStatus);
             Long codVend = readLong(r, iCodVendedor);
             String nomeVend = readText(r, iNomeVendedor);
-
-            // ✅ NOVO: lê o valor do AD_RETIRA (alias TIPO_ENTREGA)
             String tipoEntrega = readText(r, iTipoEntrega);
-
             Long numNota = readLong(r, iNumNota);
 
             Integer seq = readInt(r, iSeq);
             Long codProd = readLong(r, iCodProd);
+            Long codGrupoProd = readLong(r, iCodGrupoProd);
             String desc = readText(r, iDescricao);
             String un = readText(r, iUnidade);
 
@@ -197,6 +218,18 @@ public class PedidoConferenciaService {
             Double vlrUnit = readDouble(r, iVlrUnit);
             Double vlrTot = readDouble(r, iVlrTot);
 
+            // ✅ Lê os valores de estoque
+            Double estoqueTotal = readDouble(r, iEstoqueTotal);
+            Double estoqueReservado = readDouble(r, iEstoqueReservado);
+            Double estoqueDisp = readDouble(r, iEstoqueDisp);
+
+            // Se não conseguiu ler o estoque_disp, calcula
+            if (estoqueDisp == null && estoqueTotal != null && estoqueReservado != null) {
+                estoqueDisp = estoqueTotal - estoqueReservado;
+            } else if (estoqueDisp == null) {
+                estoqueDisp = 0.0;
+            }
+
             Double qtdOriginal = conferenciaWorkflowService.getQtdOriginalItem(
                     nunota,
                     seq,
@@ -205,7 +238,6 @@ public class PedidoConferenciaService {
 
             PedidoConferenciaDto pedido = pedidosMap.get(nunota);
             if (pedido == null) {
-                // ✅ Ajustado: agora passa o tipoEntrega no DTO (campo adRetira)
                 pedido = new PedidoConferenciaDto(
                         nunota,
                         numNota,
@@ -213,16 +245,18 @@ public class PedidoConferenciaService {
                         st,
                         codVend,
                         nomeVend,
-                        tipoEntrega, // ✅ AQUI
+                        tipoEntrega,
                         null,
                         null
                 );
                 pedidosMap.put(nunota, pedido);
             }
 
+            // ✅ Adiciona o item com estoque
             pedido.addItem(new ItemConferenciaDto(
                     seq,
                     codProd,
+                    codGrupoProd,
                     desc,
                     un,
                     qtdAtual,
@@ -230,12 +264,13 @@ public class PedidoConferenciaService {
                     qtdConferida,
                     vlrUnit,
                     vlrTot,
-                    qtdOriginal
+                    qtdOriginal,
+                    estoqueDisp
             ));
         }
 
         // ============================================================
-        // ✅ ENRIQUECE NOME_CONFERENTE COM DADOS DO MONGO (SEM QUEBRAR)
+        // ✅ ENRIQUECE NOME_CONFERENTE COM DADOS DO MONGO
         // ============================================================
         try {
             List<Long> nunotas = new ArrayList<>(pedidosMap.keySet());
@@ -257,7 +292,6 @@ public class PedidoConferenciaService {
                 }
             }
         } catch (Exception e) {
-            // ⚠️ importante: não derruba produção se Mongo falhar
             log.warn("⚠️ Falha ao enriquecer conferente via Mongo. Mantendo payload original. Motivo={}", e.getMessage());
         }
 
@@ -288,8 +322,9 @@ public class PedidoConferenciaService {
 
     private static Long readLong(JsonNode row, int idx) {
         try {
-            return row.get(idx).isNull() ? null :
-                    Long.valueOf(row.get(idx).asText().trim());
+            if (idx < 0 || idx >= row.size()) return null;
+            JsonNode v = row.get(idx);
+            return v.isNull() ? null : Long.valueOf(v.asText().trim());
         } catch (Exception e) {
             return null;
         }
@@ -297,8 +332,9 @@ public class PedidoConferenciaService {
 
     private static Integer readInt(JsonNode row, int idx) {
         try {
-            return row.get(idx).isNull() ? null :
-                    Integer.valueOf(row.get(idx).asText().trim());
+            if (idx < 0 || idx >= row.size()) return null;
+            JsonNode v = row.get(idx);
+            return v.isNull() ? null : Integer.valueOf(v.asText().trim());
         } catch (Exception e) {
             return null;
         }
@@ -306,8 +342,9 @@ public class PedidoConferenciaService {
 
     private static Double readDouble(JsonNode row, int idx) {
         try {
-            return row.get(idx).isNull() ? null :
-                    Double.valueOf(row.get(idx).asText().replace(",", "."));
+            if (idx < 0 || idx >= row.size()) return null;
+            JsonNode v = row.get(idx);
+            return v.isNull() ? null : Double.valueOf(v.asText().replace(",", "."));
         } catch (Exception e) {
             return null;
         }
