@@ -14,10 +14,13 @@ public class ItemConferenciaDto {
     private String unidade;
 
     // Quantidades
-    private Double qtdAtual;      // TGFITE.QTDNEG
-    private Double qtdEsperada;   // TGFCOI2.QTDCONFVOLPAD
-    private Double qtdConferida;  // TGFCOI2.QTDCONF
+    private Double qtdAtual;
+    private Double qtdEsperada;
+    private Double qtdConferida;
     private Double qtdOriginal;
+
+    // Estoque
+    private Double estoqueBruto;
     private Double estoqueDisponivel;
 
     // Valores
@@ -50,6 +53,7 @@ public class ItemConferenciaDto {
                 vlrUnit,
                 vlrTot,
                 qtdOriginal,
+                null,
                 null
         );
     }
@@ -67,6 +71,7 @@ public class ItemConferenciaDto {
             Double vlrUnit,
             Double vlrTot,
             Double qtdOriginal,
+            Double estoqueBruto,
             Double estoqueDisponivel
     ) {
         this.sequencia = sequencia;
@@ -80,6 +85,7 @@ public class ItemConferenciaDto {
         this.vlrUnit = vlrUnit;
         this.vlrTot = vlrTot;
         this.qtdOriginal = qtdOriginal;
+        this.estoqueBruto = estoqueBruto;
         this.estoqueDisponivel = estoqueDisponivel;
     }
 }

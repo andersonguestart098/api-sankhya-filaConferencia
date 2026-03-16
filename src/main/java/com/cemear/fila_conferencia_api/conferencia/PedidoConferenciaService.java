@@ -265,6 +265,7 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
                     vlrUnit,
                     vlrTot,
                     qtdOriginal,
+                    estoqueTotal,
                     estoqueDisp
             ));
         }
