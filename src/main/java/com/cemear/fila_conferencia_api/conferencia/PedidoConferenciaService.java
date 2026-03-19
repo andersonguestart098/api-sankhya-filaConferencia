@@ -171,7 +171,7 @@ ORDER BY
 """;
 
     public List<PedidoConferenciaDto> listarPendentes() {
-        return listarPendentesPaginado(0, 0, null, null, null, null);
+        return listarPendentesPaginado(0, 50, null, null, null, null);
     }
 
     public List<PedidoConferenciaDto> listarPendentesPaginado(
@@ -198,10 +198,9 @@ ORDER BY
 
         if (nunotaFiltro != null) {
             filtroData.append(" AND CAB.NUNOTA = ").append(nunotaFiltro).append(" ");
-            log.info("🔍 FILTRO NUNOTA ATIVO: {}", nunotaFiltro);
+            log.info("Filtro NUNOTA ativo: {}", nunotaFiltro);
         }
 
-        // neste fluxo, backend não filtra por status por enquanto
         String filtroStatusSql = "";
 
         String trechoPaginacaoSql = "";
@@ -218,24 +217,18 @@ ORDER BY
                 filtroStatusSql
         );
 
-        log.info("SQL FINAL GERADO (COM ESTOQUE):\n{}", sql);
+        log.info("Executando busca de pedidos pendentes. page={}, pageSize={}", page, pageSize);
 
         JsonNode root = gatewayClient.executeDbExplorer(sql);
         JsonNode rowsNode = root.path("responseBody").path("rows");
         JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
-
-        log.info("rowsNode.isArray={} size={}",
-                rowsNode.isArray(),
-                rowsNode.isArray() ? rowsNode.size() : -1);
-
-        List<String> cols = extractColumns(fieldsMetadata);
-        log.info("cols={}", cols);
 
         if (!rowsNode.isArray()) {
             throw new IllegalStateException("DbExplorer não retornou array 'rows'.");
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
+        List<String> cols = extractColumns(fieldsMetadata);
 
         int iNunota = indexOf(cols, "NUNOTA");
         int iNumNota = indexOf(cols, "NUMNOTA");
@@ -262,25 +255,13 @@ ORDER BY
         int iEstoqueReservado = indexOf(cols, "ESTOQUE_RESERVADO");
         int iEstoqueDisp = indexOf(cols, "ESTOQUE_DISP");
 
-        log.info("idx NUNOTA={}, NUMNOTA={}, STATUS={}, SEQUENCIA={}, CODPROD={}",
-                iNunota, iNumNota, iStatus, iSeq, iCodProd);
-
         LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
-
-        int debugCount = 0;
 
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
-            if (debugCount < 5) {
-                log.info("row raw={}", r);
-                log.info("nunota raw text={}", readText(r, iNunota));
-                debugCount++;
-            }
-
             Long nunota = readLong(r, iNunota);
             if (nunota == null) {
-                log.warn("⚠️ nunota veio null. raw={}", readText(r, iNunota));
                 continue;
             }
 
@@ -333,8 +314,6 @@ ORDER BY
                         null,
                         null
                 );
-
-
                 pedidosMap.put(nunota, pedido);
             }
 
@@ -374,10 +353,10 @@ ORDER BY
                 }
             }
         } catch (Exception e) {
-            log.warn("⚠️ Falha ao enriquecer conferente via Mongo. Mantendo payload original. Motivo={}", e.getMessage());
+            log.warn("Falha ao enriquecer conferente/tempo via Mongo. Motivo={}", e.getMessage());
         }
 
-        log.info("✅ pedidosMap.size()={}", pedidosMap.size());
+        log.info("Pedidos retornados: {}, linhas recebidas: {}", pedidosMap.size(), rows.size());
 
         return new ArrayList<>(pedidosMap.values());
     }
