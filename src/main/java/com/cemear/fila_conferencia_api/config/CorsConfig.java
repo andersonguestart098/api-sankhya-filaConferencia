@@ -17,7 +17,8 @@ public class CorsConfig implements WebMvcConfigurer {
                         "https://fila-conferencia-dash-irbh.vercel.app",
                         "https://fila-conferencia-dash-vendedor.vercel.app",
                         "https://fila-conferencia-dash-financeiro.vercel.app",
-                        "https://fila-conferencia-dash-mobile.vercel.app"
+                        "https://fila-conferencia-dash-mobile.vercel.app",
+                        "https://fila-conferencia-dash-mobile.vercel.app/"
 
                 )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
