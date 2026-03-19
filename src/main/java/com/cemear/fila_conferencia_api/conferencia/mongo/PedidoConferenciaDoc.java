@@ -26,4 +26,8 @@ public class PedidoConferenciaDoc {
     private String lastStatusConferencia;
     private Instant lastStatusUpdatedAt;
 
+    // tempo da conferência real (AC -> F)
+    private Instant conferenciaIniciadaAt;
+    private Instant conferenciaFinalizadaAt;
+    private Long tempoConferenciaMs;
 }

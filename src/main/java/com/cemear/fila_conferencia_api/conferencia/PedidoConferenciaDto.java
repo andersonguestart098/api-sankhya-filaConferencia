@@ -27,6 +27,8 @@ public class PedidoConferenciaDto {
     private String nomeConferente;       // nome de quem está conferindo
     private String avatarUrlConferente;  // URL do avatar (se tiver)
 
+    private Long tempoConferenciaMs;
+
     // --------- ITENS ---------
     private List<ItemConferenciaDto> itens = new ArrayList<>();
 

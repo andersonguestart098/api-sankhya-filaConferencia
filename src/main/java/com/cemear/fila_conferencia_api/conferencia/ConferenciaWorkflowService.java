@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import com.cemear.fila_conferencia_api.core.exception.BusinessException;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -405,29 +406,27 @@ public class ConferenciaWorkflowService {
     // ---------------------------------
     public JsonNode finalizarConferenciaOkComItens(Long nuconf, Long codUsuario) {
 
-        // 1) Finaliza cabeçalho (STATUS = F)
-        JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
-
-        // 2) Buscar NUNOTAORIG na TGFCON2
         Long nunotaOrig = buscarNunotaOrigPorNuconf(nuconf);
+
         if (nunotaOrig == null) {
-            ObjectNode combinado = objectMapper.createObjectNode();
-            combinado.set("cabecalhoConferencia", respCabecalho);
-            combinado.put("nunotaOrig", (String) null);
-            combinado.put("nuconf", nuconf);
-            combinado.put("statusItens", "NAO_PREENCHIDOS_NUNOTAORIG_NULO");
-            return combinado;
+            throw new BusinessException("Não foi possível localizar o pedido da conferência.");
         }
 
-        // 3) Preenche itens de conferência (agora STATUS já é F)
+        if (!pedidoConferenciaMongoService.possuiConferenteDefinido(nunotaOrig)) {
+            throw new BusinessException("Conferente não definido. Selecione um conferente antes de finalizar.");
+        }
+
+        JsonNode respCabecalho = finalizarConferencia(nuconf, codUsuario);
         JsonNode respDetalhes = preencherItensConferencia(nunotaOrig, nuconf);
 
-        // 4) Monta uma resposta combinada (opcional)
+        pedidoConferenciaMongoService.marcarFinalizacaoConferencia(nunotaOrig);
+
         ObjectNode combinado = objectMapper.createObjectNode();
         combinado.set("detalhesConferencia", respDetalhes);
         combinado.set("cabecalhoConferencia", respCabecalho);
         combinado.put("nunotaOrig", nunotaOrig);
         combinado.put("nuconf", nuconf);
+
 
         return combinado;
     }
@@ -635,10 +634,10 @@ public class ConferenciaWorkflowService {
     // ============================================================
     public void definirConferente(Long nunota, Integer conferenteId, String conferenteNome) {
 
-        if (nunota == null) throw new IllegalArgumentException("nunota é obrigatório");
-        if (conferenteId == null) throw new IllegalArgumentException("conferenteId é obrigatório");
+        if (nunota == null) throw new BusinessException("Pedido não informado.");
+        if (conferenteId == null) throw new BusinessException("Conferente não informado.");
         if (conferenteNome == null || conferenteNome.trim().isEmpty()) {
-            throw new IllegalArgumentException("conferenteNome é obrigatório");
+            throw new BusinessException("Nome do conferente não informado.");
         }
 
         pedidoConferenciaMongoService.definirConferente(

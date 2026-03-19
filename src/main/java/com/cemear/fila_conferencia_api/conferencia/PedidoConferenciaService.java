@@ -22,80 +22,158 @@ public class PedidoConferenciaService {
 
     private final SankhyaGatewayClient gatewayClient;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
-
-    // ✅ NOVO: serviço que consulta o Mongo para enriquecer o DTO
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
 
-// =====================================================
-// ✅ QUERY COM ESTOQUE CORRIGIDA - Agrega os valores de estoque
-// =====================================================
-private static final String SQL_PEDIDOS_PAGINADO_COM_ESTOQUE_TEMPLATE = """
-SELECT
-    X.NUNOTA,
-    CAB.NUMNOTA,
-    PAR.NOMEPARC,
-    X.STATUS_CONFERENCIA,
-    CAB.CODVEND,
-    VEND.APELIDO AS NOME_VENDEDOR,
-    CAB.AD_RETIRA AS TIPO_ENTREGA,
-
-    ITE.SEQUENCIA,
-    ITE.CODPROD,
-    PRO.CODGRUPOPROD         AS CODGRUPOPROD,
-    PRO.DESCRPROD            AS DESCRICAO,
-    ITE.CODVOL               AS UNIDADE,
-    ITE.QTDNEG               AS QTD_ATUAL,
-
-    COI.QTDCONFVOLPAD        AS QTD_ESPERADA,
-    COI.QTDCONF              AS QTD_CONFERIDA,
-
-    ITE.VLRUNIT,
-    ITE.VLRTOT,
-
-    NVL(EST_AGREGADO.ESTOQUE_TOTAL, 0) AS ESTOQUE_TOTAL,
-    NVL(EST_AGREGADO.RESERVADO_TOTAL, 0) AS ESTOQUE_RESERVADO,
-    NVL(EST_AGREGADO.ESTOQUE_TOTAL, 0) - NVL(EST_AGREGADO.RESERVADO_TOTAL, 0) AS ESTOQUE_DISP
-FROM (
+    private static final String SQL_PEDIDOS_PAGINADO_COM_ESTOQUE_TEMPLATE = """
+WITH BASE_PEDIDOS AS (
     SELECT
         CAB.NUNOTA,
+        CAB.NUMNOTA,
         CAB.CODPARC,
-        SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA,
-        ROW_NUMBER() OVER (ORDER BY CAB.NUNOTA DESC) AS RN
+        CAB.CODVEND,
+        CAB.AD_RETIRA,
+        CAB.CODEMP,
+        CAB.NUCONFATUAL,
+        SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
     FROM TGFCAB CAB
     WHERE 1 = 1
       %s
-) X
-JOIN TGFCAB CAB ON CAB.NUNOTA = X.NUNOTA
-JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
-JOIN TGFITE ITE ON ITE.NUNOTA = X.NUNOTA
-JOIN TGFPRO PRO ON PRO.CODPROD = ITE.CODPROD
-LEFT JOIN TGFVEN VEND ON VEND.CODVEND = CAB.CODVEND
-LEFT JOIN TGFCOI2 COI ON COI.NUCONF = CAB.NUCONFATUAL AND COI.SEQCONF = ITE.SEQUENCIA
+),
+PEDIDOS_COM_STATUS AS (
+    SELECT
+        B.NUNOTA,
+        B.NUMNOTA,
+        B.CODPARC,
+        B.CODVEND,
+        B.AD_RETIRA,
+        B.CODEMP,
+        B.NUCONFATUAL,
+        B.STATUS_CONFERENCIA
+    FROM BASE_PEDIDOS B
+    WHERE NVL(TRIM(B.STATUS_CONFERENCIA), '#') <> '#'
+),
+PEDIDOS_NUMERADOS AS (
+    SELECT
+        P.NUNOTA,
+        P.NUMNOTA,
+        P.CODPARC,
+        P.CODVEND,
+        P.AD_RETIRA,
+        P.CODEMP,
+        P.NUCONFATUAL,
+        P.STATUS_CONFERENCIA,
+        ROW_NUMBER() OVER (ORDER BY P.NUNOTA DESC) AS RN
+    FROM PEDIDOS_COM_STATUS P
+),
+PEDIDOS_PAGINADOS AS (
+    SELECT
+        PN.NUNOTA,
+        PN.NUMNOTA,
+        PN.CODPARC,
+        PN.CODVEND,
+        PN.AD_RETIRA,
+        PN.CODEMP,
+        PN.NUCONFATUAL,
+        PN.STATUS_CONFERENCIA,
+        PN.RN
+    FROM PEDIDOS_NUMERADOS PN
+    WHERE 1 = 1
+      %s
+),
+ITENS_PAGINA AS (
+    SELECT
+        P.NUNOTA,
+        P.NUMNOTA,
+        P.CODPARC,
+        P.CODVEND,
+        P.AD_RETIRA,
+        P.CODEMP,
+        P.NUCONFATUAL,
+        P.STATUS_CONFERENCIA,
+        P.RN,
 
-LEFT JOIN (
-    SELECT 
+        ITE.SEQUENCIA,
+        ITE.CODPROD,
+        ITE.CODVOL,
+        ITE.QTDNEG,
+        ITE.VLRUNIT,
+        ITE.VLRTOT,
+
+        PRO.CODGRUPOPROD,
+        PRO.DESCRPROD
+    FROM PEDIDOS_PAGINADOS P
+    JOIN TGFITE ITE
+      ON ITE.NUNOTA = P.NUNOTA
+    JOIN TGFPRO PRO
+      ON PRO.CODPROD = ITE.CODPROD
+    WHERE 1 = 1
+      %s
+),
+CHAVES_ESTOQUE AS (
+    SELECT DISTINCT
+        I.CODPROD,
+        I.CODEMP
+    FROM ITENS_PAGINA I
+),
+EST_AGREGADO AS (
+    SELECT
         EST.CODPROD,
         EST.CODEMP,
         SUM(NVL(EST.ESTOQUE, 0)) AS ESTOQUE_TOTAL,
         SUM(NVL(EST.RESERVADO, 0)) AS RESERVADO_TOTAL
     FROM TGFEST EST
-    GROUP BY EST.CODPROD, EST.CODEMP
-) EST_AGREGADO ON EST_AGREGADO.CODPROD = ITE.CODPROD 
-               AND EST_AGREGADO.CODEMP = CAB.CODEMP
+    JOIN CHAVES_ESTOQUE C
+      ON C.CODPROD = EST.CODPROD
+     AND C.CODEMP  = EST.CODEMP
+    GROUP BY
+        EST.CODPROD,
+        EST.CODEMP
+)
+SELECT
+    I.NUNOTA,
+    I.NUMNOTA,
+    PAR.NOMEPARC,
+    I.STATUS_CONFERENCIA,
+    I.CODVEND,
+    VEND.APELIDO AS NOME_VENDEDOR,
+    I.AD_RETIRA AS TIPO_ENTREGA,
 
-WHERE NVL(X.STATUS_CONFERENCIA, ' ') <> ' '
-  %s
-  %s
-ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
+    I.SEQUENCIA,
+    I.CODPROD,
+    I.CODGRUPOPROD AS CODGRUPOPROD,
+    I.DESCRPROD    AS DESCRICAO,
+    I.CODVOL       AS UNIDADE,
+    I.QTDNEG       AS QTD_ATUAL,
+
+    COI.QTDCONFVOLPAD AS QTD_ESPERADA,
+    COI.QTDCONF       AS QTD_CONFERIDA,
+
+    I.VLRUNIT,
+    I.VLRTOT,
+
+    NVL(E.ESTOQUE_TOTAL, 0) AS ESTOQUE_TOTAL,
+    NVL(E.RESERVADO_TOTAL, 0) AS ESTOQUE_RESERVADO,
+    NVL(E.ESTOQUE_TOTAL, 0) - NVL(E.RESERVADO_TOTAL, 0) AS ESTOQUE_DISP
+FROM ITENS_PAGINA I
+JOIN TGFPAR PAR
+  ON PAR.CODPARC = I.CODPARC
+LEFT JOIN TGFVEN VEND
+  ON VEND.CODVEND = I.CODVEND
+LEFT JOIN TGFCOI2 COI
+  ON COI.NUCONF  = I.NUCONFATUAL
+ AND COI.SEQCONF = I.SEQUENCIA
+LEFT JOIN EST_AGREGADO E
+  ON E.CODPROD = I.CODPROD
+ AND E.CODEMP  = I.CODEMP
+ORDER BY
+    I.NUNOTA DESC,
+    I.SEQUENCIA
 """;
 
     public List<PedidoConferenciaDto> listarPendentes() {
         return listarPendentesPaginado(0, 0, null, null, null, null);
     }
 
-    /**
-     * AGORA ACEITA NUNOTA E TRAZ ESTOQUE! (6 parâmetros)
-     */
     public List<PedidoConferenciaDto> listarPendentesPaginado(
             int page,
             int pageSize,
@@ -104,68 +182,61 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
             LocalDate dataFim,
             Long nunotaFiltro
     ) {
-
-        // --------------------- FILTRO DE DATA E NUNOTA ------------------------
         StringBuilder filtroData = new StringBuilder();
 
         if (dataIni != null && dataFim != null) {
             DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
             filtroData.append(String.format("""
-                AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
-                AND CAB.DTNEG < TO_DATE('%s', 'DD/MM/YYYY') + 1
-            """, dataIni.format(fmt), dataFim.format(fmt)));
+        AND CAB.DTNEG >= TO_DATE('%s', 'DD/MM/YYYY')
+        AND CAB.DTNEG < TO_DATE('%s', 'DD/MM/YYYY') + 1
+    """, dataIni.format(fmt), dataFim.format(fmt)));
         } else {
             filtroData.append("""
-                AND CAB.DTNEG >= TRUNC(SYSDATE, 'MM')
-                AND CAB.DTNEG < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
-            """);
+        AND CAB.DTNEG >= TRUNC(SYSDATE) - 90
+    """);
         }
 
-        // 🔍 FILTRO POR NUNOTA
         if (nunotaFiltro != null) {
             filtroData.append(" AND CAB.NUNOTA = ").append(nunotaFiltro).append(" ");
             log.info("🔍 FILTRO NUNOTA ATIVO: {}", nunotaFiltro);
         }
 
-        // --------------------- FILTRO STATUS ------------------------
+        // neste fluxo, backend não filtra por status por enquanto
         String filtroStatusSql = "";
-        if (status != null && !status.isBlank()) {
-            filtroStatusSql = " AND X.STATUS_CONFERENCIA = '" + status.trim() + "'";
-        }
 
-        // --------------------- PAGINAÇÃO ------------------------
         String trechoPaginacaoSql = "";
         if (pageSize > 0) {
             int inicio = page * pageSize + 1;
             int fim = inicio + pageSize - 1;
-
-            trechoPaginacaoSql =
-                    " AND X.RN BETWEEN " + inicio + " AND " + fim + " ";
+            trechoPaginacaoSql = " AND RN BETWEEN " + inicio + " AND " + fim + " ";
         }
 
-        // --------------------- MONTA SQL FINAL ------------------------
         String sql = String.format(
                 SQL_PEDIDOS_PAGINADO_COM_ESTOQUE_TEMPLATE,
                 filtroData,
-                filtroStatusSql,
-                trechoPaginacaoSql
+                trechoPaginacaoSql,
+                filtroStatusSql
         );
 
         log.info("SQL FINAL GERADO (COM ESTOQUE):\n{}", sql);
 
-        // --------------------- EXECUÇÃO ------------------------
         JsonNode root = gatewayClient.executeDbExplorer(sql);
         JsonNode rowsNode = root.path("responseBody").path("rows");
         JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
+
+        log.info("rowsNode.isArray={} size={}",
+                rowsNode.isArray(),
+                rowsNode.isArray() ? rowsNode.size() : -1);
+
+        List<String> cols = extractColumns(fieldsMetadata);
+        log.info("cols={}", cols);
 
         if (!rowsNode.isArray()) {
             throw new IllegalStateException("DbExplorer não retornou array 'rows'.");
         }
 
         ArrayNode rows = (ArrayNode) rowsNode;
-        List<String> cols = extractColumns(fieldsMetadata);
 
-        // Mapeamento dos índices das colunas
         int iNunota = indexOf(cols, "NUNOTA");
         int iNumNota = indexOf(cols, "NUMNOTA");
         int iNomeParc = indexOf(cols, "NOMEPARC");
@@ -187,17 +258,32 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
         int iVlrUnit = indexOf(cols, "VLRUNIT");
         int iVlrTot = indexOf(cols, "VLRTOT");
 
-        // ✅ NOVOS ÍNDICES PARA ESTOQUE
         int iEstoqueTotal = indexOf(cols, "ESTOQUE_TOTAL");
         int iEstoqueReservado = indexOf(cols, "ESTOQUE_RESERVADO");
         int iEstoqueDisp = indexOf(cols, "ESTOQUE_DISP");
 
+        log.info("idx NUNOTA={}, NUMNOTA={}, STATUS={}, SEQUENCIA={}, CODPROD={}",
+                iNunota, iNumNota, iStatus, iSeq, iCodProd);
+
         LinkedHashMap<Long, PedidoConferenciaDto> pedidosMap = new LinkedHashMap<>();
+
+        int debugCount = 0;
 
         for (JsonNode r : rows) {
             if (!r.isArray()) continue;
 
+            if (debugCount < 5) {
+                log.info("row raw={}", r);
+                log.info("nunota raw text={}", readText(r, iNunota));
+                debugCount++;
+            }
+
             Long nunota = readLong(r, iNunota);
+            if (nunota == null) {
+                log.warn("⚠️ nunota veio null. raw={}", readText(r, iNunota));
+                continue;
+            }
+
             String nomeParc = readText(r, iNomeParc);
             String st = readText(r, iStatus);
             Long codVend = readLong(r, iCodVendedor);
@@ -218,12 +304,10 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
             Double vlrUnit = readDouble(r, iVlrUnit);
             Double vlrTot = readDouble(r, iVlrTot);
 
-            // ✅ Lê os valores de estoque
             Double estoqueTotal = readDouble(r, iEstoqueTotal);
             Double estoqueReservado = readDouble(r, iEstoqueReservado);
             Double estoqueDisp = readDouble(r, iEstoqueDisp);
 
-            // Se não conseguiu ler o estoque_disp, calcula
             if (estoqueDisp == null && estoqueTotal != null && estoqueReservado != null) {
                 estoqueDisp = estoqueTotal - estoqueReservado;
             } else if (estoqueDisp == null) {
@@ -249,10 +333,17 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
                         null,
                         null
                 );
+
+                try {
+                    pedidoConferenciaMongoService.upsertLastStatusConferencia(nunota, st);
+                } catch (Exception e) {
+                    log.warn("⚠️ Falha ao persistir status/tempo no Mongo para nunota={} status={}. Motivo={}",
+                            nunota, st, e.getMessage());
+                }
+
                 pedidosMap.put(nunota, pedido);
             }
 
-            // ✅ Adiciona o item com estoque
             pedido.addItem(new ItemConferenciaDto(
                     seq,
                     codProd,
@@ -270,25 +361,21 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
             ));
         }
 
-        // ============================================================
-        // ✅ ENRIQUECE NOME_CONFERENTE COM DADOS DO MONGO
-        // ============================================================
         try {
             List<Long> nunotas = new ArrayList<>(pedidosMap.keySet());
             if (!nunotas.isEmpty()) {
-
                 var confMap = pedidoConferenciaMongoService.mapByNunota(nunotas);
 
                 for (Long nunota : nunotas) {
                     PedidoConferenciaDto dto = pedidosMap.get(nunota);
                     PedidoConferenciaDoc doc = confMap.get(nunota);
 
-                    if (dto != null
-                            && doc != null
-                            && doc.getConferenteNome() != null
-                            && !doc.getConferenteNome().trim().isEmpty()) {
+                    if (dto != null && doc != null) {
+                        if (doc.getConferenteNome() != null && !doc.getConferenteNome().trim().isEmpty()) {
+                            dto.setNomeConferente(doc.getConferenteNome().trim());
+                        }
 
-                        dto.setNomeConferente(doc.getConferenteNome().trim());
+                        dto.setTempoConferenciaMs(doc.getTempoConferenciaMs());
                     }
                 }
             }
@@ -296,10 +383,11 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
             log.warn("⚠️ Falha ao enriquecer conferente via Mongo. Mantendo payload original. Motivo={}", e.getMessage());
         }
 
+        log.info("✅ pedidosMap.size()={}", pedidosMap.size());
+
         return new ArrayList<>(pedidosMap.values());
     }
 
-    // ----------------- HELPERS -------------------
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
         List<String> cols = new ArrayList<>();
         for (JsonNode n : fieldsMetadata) {
@@ -318,14 +406,29 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
     private static String readText(JsonNode row, int idx) {
         if (idx < 0 || idx >= row.size()) return null;
         JsonNode v = row.get(idx);
-        return v.isNull() ? null : v.asText();
+        return v == null || v.isNull() ? null : v.asText();
     }
 
     private static Long readLong(JsonNode row, int idx) {
         try {
             if (idx < 0 || idx >= row.size()) return null;
             JsonNode v = row.get(idx);
-            return v.isNull() ? null : Long.valueOf(v.asText().trim());
+            if (v == null || v.isNull()) return null;
+
+            String txt = v.asText();
+            if (txt == null) return null;
+
+            txt = txt.trim();
+            if (txt.isEmpty()) return null;
+
+            txt = txt.replace(",", ".");
+
+            if (txt.contains(".")) {
+                double d = Double.parseDouble(txt);
+                return (long) d;
+            }
+
+            return Long.valueOf(txt);
         } catch (Exception e) {
             return null;
         }
@@ -335,7 +438,22 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
         try {
             if (idx < 0 || idx >= row.size()) return null;
             JsonNode v = row.get(idx);
-            return v.isNull() ? null : Integer.valueOf(v.asText().trim());
+            if (v == null || v.isNull()) return null;
+
+            String txt = v.asText();
+            if (txt == null) return null;
+
+            txt = txt.trim();
+            if (txt.isEmpty()) return null;
+
+            txt = txt.replace(",", ".");
+
+            if (txt.contains(".")) {
+                double d = Double.parseDouble(txt);
+                return (int) d;
+            }
+
+            return Integer.valueOf(txt);
         } catch (Exception e) {
             return null;
         }
@@ -345,7 +463,16 @@ ORDER BY X.NUNOTA DESC, ITE.SEQUENCIA
         try {
             if (idx < 0 || idx >= row.size()) return null;
             JsonNode v = row.get(idx);
-            return v.isNull() ? null : Double.valueOf(v.asText().replace(",", "."));
+            if (v == null || v.isNull()) return null;
+
+            String txt = v.asText();
+            if (txt == null) return null;
+
+            txt = txt.trim();
+            if (txt.isEmpty()) return null;
+
+            txt = txt.replace(",", ".");
+            return Double.valueOf(txt);
         } catch (Exception e) {
             return null;
         }
