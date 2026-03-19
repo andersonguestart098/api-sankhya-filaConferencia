@@ -333,7 +333,7 @@ ORDER BY
                         null,
                         null
                 );
-                
+
 
                 pedidosMap.put(nunota, pedido);
             }
