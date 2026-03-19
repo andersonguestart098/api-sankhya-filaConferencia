@@ -47,7 +47,7 @@ public class ConferenciaController {
     @GetMapping("/pedidos-pendentes")
     public ResponseEntity<Map<String, Object>> listarPendentes(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int pageSize,
+            @RequestParam(defaultValue = "70") int pageSize,
             @RequestParam(required = false) String status,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataIni,
