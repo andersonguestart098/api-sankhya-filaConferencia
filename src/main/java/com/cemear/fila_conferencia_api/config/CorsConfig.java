@@ -10,16 +10,13 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                // libera as origens do teu frontend web
                 .allowedOrigins(
-                        "http://localhost:3000",   // React local
-                        "http://localhost:5173",    // Vite (se usar)
+                        "http://localhost:3000",
+                        "http://localhost:5173",
                         "https://fila-conferencia-dash-irbh.vercel.app",
                         "https://fila-conferencia-dash-vendedor.vercel.app",
                         "https://fila-conferencia-dash-financeiro.vercel.app",
-                        "https://fila-conferencia-dash-mobile.vercel.app",
-                        "https://fila-conferencia-dash-mobile.vercel.app/"
-
+                        "https://fila-conferencia-dash-mobile.vercel.app"
                 )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")

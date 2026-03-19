@@ -333,13 +333,7 @@ ORDER BY
                         null,
                         null
                 );
-
-                try {
-                    pedidoConferenciaMongoService.upsertLastStatusConferencia(nunota, st);
-                } catch (Exception e) {
-                    log.warn("⚠️ Falha ao persistir status/tempo no Mongo para nunota={} status={}. Motivo={}",
-                            nunota, st, e.getMessage());
-                }
+                
 
                 pedidosMap.put(nunota, pedido);
             }
