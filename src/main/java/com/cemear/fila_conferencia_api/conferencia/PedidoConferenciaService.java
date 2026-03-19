@@ -192,7 +192,7 @@ ORDER BY
     """, dataIni.format(fmt), dataFim.format(fmt)));
         } else {
             filtroData.append("""
-        AND CAB.DTNEG >= TRUNC(SYSDATE) - 90
+        AND CAB.DTNEG >= TRUNC(SYSDATE) - 30
     """);
         }
 

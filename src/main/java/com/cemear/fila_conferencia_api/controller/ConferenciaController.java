@@ -6,24 +6,22 @@ import com.cemear.fila_conferencia_api.conferencia.ConferenciaWorkflowService;
 import com.cemear.fila_conferencia_api.conferencia.FinalizarConferenciaRequest;
 import com.cemear.fila_conferencia_api.conferencia.IniciarConferenciaRequest;
 import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
-import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaService;
 import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
+import com.cemear.fila_conferencia_api.conferencia.cache.PedidoConferenciaCacheService;
 import com.cemear.fila_conferencia_api.conferencia.mongo.ConferenciaItemMongoService;
-import com.cemear.fila_conferencia_api.conferencia.mongo.ItemConferenciaDoc;
+import com.cemear.fila_conferencia_api.conferencia.sse.SseHub;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import com.cemear.fila_conferencia_api.conferencia.sse.SseHub;
-import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/conferencia")
@@ -31,23 +29,21 @@ import java.util.Optional;
 @Slf4j
 public class ConferenciaController {
 
-    private final PedidoConferenciaService pedidoConferenciaService;
+    private final PedidoConferenciaCacheService pedidoConferenciaCacheService;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
     private final SseHub sseHub;
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
+        log.info("📡 SSE client conectado");
         return sseHub.addClient();
     }
 
-    // ============================================================
-    // 1) Lista pedidos pendentes (paginado + filtros + NUNOTA)
-    // ============================================================
     @GetMapping("/pedidos-pendentes")
     public ResponseEntity<Map<String, Object>> listarPendentes(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int pageSize,
+            @RequestParam(defaultValue = "75") int pageSize,
             @RequestParam(required = false) String status,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataIni,
@@ -56,11 +52,11 @@ public class ConferenciaController {
             @RequestParam(required = false) Long nunota
     ) {
         log.info(
-                "LISTAR_PENDENTES page={}, pageSize={}, status={}, dataIni={}, dataFim={}, nunota={}",
+                "LISTAR_PENDENTES_CACHE page={}, pageSize={}, status={}, dataIni={}, dataFim={}, nunota={}",
                 page, pageSize, status, dataIni, dataFim, nunota
         );
 
-        List<PedidoConferenciaDto> pedidos = pedidoConferenciaService.listarPendentesPaginado(
+        List<PedidoConferenciaDto> pedidos = pedidoConferenciaCacheService.listarDoCache(
                 page,
                 pageSize,
                 status,
@@ -69,25 +65,28 @@ public class ConferenciaController {
                 nunota
         );
 
-        log.info("Retornando {} pedidos com estoque", pedidos.size());
+        long total = pedidoConferenciaCacheService.contarDoCache(
+                status,
+                dataIni,
+                dataFim,
+                nunota
+        );
+
+        log.info("Retornando {} pedidos do cache / total={}", pedidos.size(), total);
 
         return ResponseEntity.ok(Map.of(
                 "pedidos", pedidos,
-                "total", pedidos.size(),
+                "total", total,
                 "page", page,
                 "pageSize", pageSize
         ));
     }
 
-    // ============================================================
-    // 2) Inicia conferência para um pedido escolhido
-    // ============================================================
     @PostMapping("/iniciar")
     public ResponseEntity<?> iniciar(@RequestBody IniciarConferenciaRequest req) {
         log.info("🚀 INICIAR_CONFERENCIA - nunotaOrig: {}, codUsuario: {}",
                 req.nunotaOrig(), req.codUsuario());
 
-        // 2.1 Cria a conferência no Sankhya
         JsonNode resp = conferenciaWorkflowService.iniciarConferencia(
                 req.nunotaOrig(),
                 req.codUsuario()
@@ -108,7 +107,6 @@ public class ConferenciaController {
         Long nuconf = nuconfNode.asLong();
         log.info("✅ CONFERENCIA_CRIADA - nunotaOrig: {}, nuconf: {}", req.nunotaOrig(), nuconf);
 
-        // 2.2 Atualiza NUCONF no cabeçalho da nota (TGFCAB)
         try {
             conferenciaWorkflowService.atualizarNuconfCabecalhoNota(
                     req.nunotaOrig(),
@@ -120,7 +118,6 @@ public class ConferenciaController {
                     req.nunotaOrig(), nuconf, e);
         }
 
-        // 2.3 Preenche itens da conferência (TGFCOI2)
         try {
             conferenciaWorkflowService.preencherItensConferencia(
                     req.nunotaOrig(),
@@ -128,14 +125,10 @@ public class ConferenciaController {
             );
             log.info("✅ ITENS_PREENCHIDOS - nunotaOrig: {}, nuconf: {}", req.nunotaOrig(), nuconf);
         } catch (Exception e) {
-            // Se já existirem itens ou der algum problema pontual, loga e segue
-            log.warn(
-                    "⚠️  FALHA_PREENCER_ITENS - nunota={}, nuconf={}",
-                    req.nunotaOrig(), nuconf, e
-            );
+            log.warn("⚠️ FALHA_PREENCHER_ITENS - nunota={}, nuconf={}",
+                    req.nunotaOrig(), nuconf, e);
         }
 
-        // 2.4 Resposta pro front
         ConferenciaCriadaDto dtoResposta = new ConferenciaCriadaDto(
                 nuconf,
                 req.nunotaOrig()
@@ -145,9 +138,6 @@ public class ConferenciaController {
         return ResponseEntity.ok(dtoResposta);
     }
 
-    // ============================================================
-    // 3) Rota opcional para reprocessar/preencher itens manualmente
-    // ============================================================
     @PostMapping("/preencher-itens")
     public ResponseEntity<?> preencherItens(@RequestBody PreencherItensRequest req) {
         log.info("🔄 PREENCHER_ITENS_MANUAL - nunotaOrig: {}, nuconf: {}",
@@ -160,18 +150,19 @@ public class ConferenciaController {
 
         log.info("✅ ITENS_PREENCHIDOS_MANUAL - nunotaOrig: {}, nuconf: {}",
                 req.nunotaOrig(), req.nuconf());
+
         return ResponseEntity.ok(resp);
     }
 
     @PostMapping("/conferente")
-    public ResponseEntity<?> definirConferente(
-            @RequestBody Map<String, Object> req
-    ) {
+    public ResponseEntity<?> definirConferente(@RequestBody Map<String, Object> req) {
         Long nunota = Long.valueOf(req.get("nunota").toString());
         String nome = req.get("nome").toString();
         Integer codUsuario = Integer.valueOf(req.get("codUsuario").toString());
 
-        // ✅ ORDEM CORRETA
+        log.info("👤 DEFINIR_CONFERENTE - nunota={}, codUsuario={}, nome={}",
+                nunota, codUsuario, nome);
+
         conferenciaWorkflowService.definirConferente(
                 nunota,
                 codUsuario,
@@ -181,10 +172,6 @@ public class ConferenciaController {
         return ResponseEntity.ok().build();
     }
 
-
-    // ============================================================
-    // 4) Finaliza conferência OK (sem divergência)
-    // ============================================================
     @PostMapping("/finalizar")
     public ResponseEntity<?> finalizar(@RequestBody FinalizarConferenciaRequest req) {
         log.info("🏁 FINALIZAR_CONFERENCIA - nuconf: {}, codUsuario: {}",
@@ -199,9 +186,6 @@ public class ConferenciaController {
         return ResponseEntity.ok(resp);
     }
 
-    // ============================================================
-    // 5) Finaliza conferência divergente
-    // ============================================================
     @PostMapping("/finalizar-divergente")
     public ResponseEntity<?> finalizarDivergente(@RequestBody FinalizarDivergenteRequest req) {
         log.info("🎯 FINALIZAR_DIVERGENTE - nuconf: {}, nunotaOrig: {}, codUsuario: {}, itens: {}",
@@ -216,12 +200,9 @@ public class ConferenciaController {
         return ResponseEntity.ok(result);
     }
 
-    // ============================================================
-    // 6) Health check simples
-    // ============================================================
     @GetMapping("/health")
     public ResponseEntity<?> health() {
-        log.info("❤️  HEALTH_CHECK");
+        log.info("❤️ HEALTH_CHECK");
         return ResponseEntity.ok(Map.of(
                 "status", "UP",
                 "service", "Conferencia API",

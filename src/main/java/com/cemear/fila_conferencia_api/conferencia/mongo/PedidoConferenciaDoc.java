@@ -1,5 +1,6 @@
 package com.cemear.fila_conferencia_api.conferencia.mongo;
 
+import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -26,8 +27,10 @@ public class PedidoConferenciaDoc {
     private String lastStatusConferencia;
     private Instant lastStatusUpdatedAt;
 
-    // tempo da conferência real (AC -> F)
     private Instant conferenciaIniciadaAt;
     private Instant conferenciaFinalizadaAt;
     private Long tempoConferenciaMs;
+
+    // snapshot completo da fila
+    private PedidoConferenciaDto snapshot;
 }

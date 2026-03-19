@@ -1,5 +1,6 @@
 package com.cemear.fila_conferencia_api.conferencia.mongo;
 
+import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,9 +19,6 @@ public class PedidoConferenciaMongoService {
 
     private final PedidoConferenciaRepository repo;
 
-    // ============================================================
-    // DEFINIR CONFERENTE
-    // ============================================================
     public void definirConferente(
             Long nunota,
             Integer conferenteId,
@@ -49,9 +47,6 @@ public class PedidoConferenciaMongoService {
         repo.save(doc);
     }
 
-    // ============================================================
-    // BUSCAR POR NUNOTA
-    // ============================================================
     public Optional<PedidoConferenciaDoc> buscarPorNunota(Long nunota) {
         if (nunota == null) {
             return Optional.empty();
@@ -59,9 +54,6 @@ public class PedidoConferenciaMongoService {
         return repo.findByNunota(nunota);
     }
 
-    // ============================================================
-    // POSSUI CONFERENTE DEFINIDO?
-    // ============================================================
     public boolean possuiConferenteDefinido(Long nunota) {
         return buscarPorNunota(nunota)
                 .map(doc ->
@@ -72,9 +64,6 @@ public class PedidoConferenciaMongoService {
                 .orElse(false);
     }
 
-    // ============================================================
-    // BUSCA EM LOTE
-    // ============================================================
     public Map<Long, PedidoConferenciaDoc> mapByNunota(List<Long> nunotas) {
         if (nunotas == null || nunotas.isEmpty()) {
             return Map.of();
@@ -89,18 +78,72 @@ public class PedidoConferenciaMongoService {
                 ));
     }
 
-    // ============================================================
-    // STATUS: pegar último status salvo
-    // ============================================================
+    public void upsertSnapshot(List<PedidoConferenciaDto> pedidos) {
+        if (pedidos == null || pedidos.isEmpty()) {
+            return;
+        }
+
+        Instant now = Instant.now();
+
+        for (PedidoConferenciaDto pedido : pedidos) {
+            if (pedido == null || pedido.getNunota() == null) {
+                continue;
+            }
+
+            Long nunota = pedido.getNunota();
+
+            PedidoConferenciaDoc doc = repo.findByNunota(nunota)
+                    .orElseGet(() -> {
+                        PedidoConferenciaDoc novo = new PedidoConferenciaDoc();
+                        novo.setNunota(nunota);
+                        novo.setCreatedAt(now);
+                        return novo;
+                    });
+
+            String statusAtual = normalizeStatus(pedido.getStatusConferencia());
+            String statusAnterior = normalizeStatus(doc.getLastStatusConferencia());
+
+            doc.setSnapshot(pedido);
+
+            if (statusAtual != null) {
+                doc.setLastStatusConferencia(statusAtual);
+                doc.setLastStatusUpdatedAt(now);
+            }
+
+            if ("AC".equals(statusAtual) && doc.getConferenciaIniciadaAt() == null) {
+                doc.setConferenciaIniciadaAt(now);
+            }
+
+            if ("F".equals(statusAtual) && doc.getConferenciaFinalizadaAt() == null) {
+                doc.setConferenciaFinalizadaAt(now);
+
+                Instant inicio = doc.getConferenciaIniciadaAt();
+                if (inicio != null) {
+                    long tempoMs = doc.getConferenciaFinalizadaAt().toEpochMilli() - inicio.toEpochMilli();
+                    doc.setTempoConferenciaMs(Math.max(tempoMs, 0L));
+                }
+            }
+
+            if (statusAnterior == null && statusAtual != null) {
+                doc.setLastStatusConferencia(statusAtual);
+                doc.setLastStatusUpdatedAt(now);
+            }
+
+            doc.setUpdatedAt(now);
+            repo.save(doc);
+        }
+    }
+
+    public List<PedidoConferenciaDoc> findAllSnapshot() {
+        return repo.findAll();
+    }
+
     public String getLastStatusConferencia(Long nunota) {
         return repo.findByNunota(nunota)
                 .map(PedidoConferenciaDoc::getLastStatusConferencia)
                 .orElse(null);
     }
 
-    // ============================================================
-    // STATUS + TEMPO DA CONFERÊNCIA (AC -> F)
-    // ============================================================
     public PedidoConferenciaDoc upsertLastStatusConferencia(Long nunota, String status) {
         Instant now = Instant.now();
 
@@ -113,20 +156,15 @@ public class PedidoConferenciaMongoService {
                     return novo;
                 });
 
-        String statusNormalizado = status == null ? null : status.trim().toUpperCase();
-        String statusAnterior = doc.getLastStatusConferencia() == null
-                ? null
-                : doc.getLastStatusConferencia().trim().toUpperCase();
+        String statusNormalizado = normalizeStatus(status);
 
         doc.setLastStatusConferencia(statusNormalizado);
         doc.setLastStatusUpdatedAt(now);
 
-        // início: grava só a primeira vez que entra em AC
         if ("AC".equals(statusNormalizado) && doc.getConferenciaIniciadaAt() == null) {
             doc.setConferenciaIniciadaAt(now);
         }
 
-        // final: grava só a primeira vez que entra em F
         if ("F".equals(statusNormalizado) && doc.getConferenciaFinalizadaAt() == null) {
             doc.setConferenciaFinalizadaAt(now);
 
@@ -142,9 +180,6 @@ public class PedidoConferenciaMongoService {
         return repo.save(doc);
     }
 
-    // ============================================================
-    // MARCAR INÍCIO MANUAL (opcional)
-    // ============================================================
     public PedidoConferenciaDoc marcarInicioConferencia(Long nunota) {
         Instant now = Instant.now();
 
@@ -165,9 +200,6 @@ public class PedidoConferenciaMongoService {
         return repo.save(doc);
     }
 
-    // ============================================================
-// MARCAR FINALIZAÇÃO MANUAL (opcional)
-// ============================================================
     public PedidoConferenciaDoc marcarFinalizacaoConferencia(Long nunota) {
         Instant now = Instant.now();
 
@@ -180,14 +212,12 @@ public class PedidoConferenciaMongoService {
                     return novo;
                 });
 
-        // fallback: se o polling não pegou o AC, cria um início mínimo
         if (doc.getConferenciaIniciadaAt() == null) {
             doc.setConferenciaIniciadaAt(
                     doc.getCreatedAt() != null ? doc.getCreatedAt() : now
             );
         }
 
-        // grava fim só uma vez
         if (doc.getConferenciaFinalizadaAt() == null) {
             doc.setConferenciaFinalizadaAt(now);
         }
@@ -205,5 +235,12 @@ public class PedidoConferenciaMongoService {
         doc.setUpdatedAt(now);
 
         return repo.save(doc);
+    }
+
+    private String normalizeStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        return status.trim().toUpperCase();
     }
 }
