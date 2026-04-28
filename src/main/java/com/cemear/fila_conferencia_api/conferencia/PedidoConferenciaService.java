@@ -141,6 +141,7 @@ EST_AGREGADO AS (
 SELECT
     I.NUNOTA,
     I.NUMNOTA,
+    I.NUCONFATUAL AS NUCONF,
     PAR.NOMEPARC,
     I.STATUS_CONFERENCIA,
     I.CODVEND,
@@ -242,6 +243,7 @@ ORDER BY
 
         int iNunota = indexOf(cols, "NUNOTA");
         int iNumNota = indexOf(cols, "NUMNOTA");
+        int iNuconf = indexOf(cols, "NUCONF");
         int iNomeParc = indexOf(cols, "NOMEPARC");
         int iStatus = indexOf(cols, "STATUS_CONFERENCIA");
         int iCodVendedor = indexOf(cols, "CODVEND");
@@ -281,6 +283,7 @@ ORDER BY
             String nomeVend = readText(r, iNomeVendedor);
             String tipoEntrega = readText(r, iTipoEntrega);
             Long numNota = readLong(r, iNumNota);
+            Long nuconf = readLong(r, iNuconf);
 
             Integer seq = readInt(r, iSeq);
             Long codProd = readLong(r, iCodProd);
@@ -316,6 +319,7 @@ ORDER BY
                 pedido = new PedidoConferenciaDto(
                         nunota,
                         numNota,
+                        nuconf,
                         nomeParc,
                         st,
                         codVend,

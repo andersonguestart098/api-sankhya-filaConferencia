@@ -134,6 +134,10 @@ public class PedidoConferenciaMongoService {
         }
     }
 
+    public PedidoConferenciaDoc save(PedidoConferenciaDoc doc) {
+        return repo.save(doc);
+    }
+
     public List<PedidoConferenciaDoc> findAllSnapshot() {
         return repo.findAll();
     }

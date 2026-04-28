@@ -13,6 +13,7 @@ public class PedidoConferenciaDto {
     // --------- CAMPOS BÁSICOS ---------
     private Long nunota;              // NUNOTA (chave interna Sankhya)
     private Long numNota;             // NUMNOTA (número da nota que aparece pro usuário)
+    private Long nuconf;
     private String nomeParc;          // NOMEPARC (nome do cliente/parceiro)
     private String statusConferencia; // status (AC, F, D, etc.)
 
@@ -37,6 +38,7 @@ public class PedidoConferenciaDto {
     // ==============================
     public PedidoConferenciaDto(Long nunota,
                                 Long numNota,
+                                Long nuconf,
                                 String nomeParc,
                                 String statusConferencia,
                                 Long codVendedor,
@@ -46,6 +48,7 @@ public class PedidoConferenciaDto {
                                 String avatarUrlConferente) {
         this.nunota = nunota;
         this.numNota = numNota;
+        this.nuconf = nuconf;
         this.nomeParc = nomeParc;
         this.statusConferencia = statusConferencia;
         this.codVendedor = codVendedor;
@@ -63,16 +66,12 @@ public class PedidoConferenciaDto {
                                 Long numNota,
                                 String nomeParc,
                                 String statusConferencia) {
-        this(nunota, numNota, nomeParc, statusConferencia,
+        this(nunota, numNota, null, nomeParc, statusConferencia,
                 null, null, null, null, null);
     }
 
-    // ==============================
-    // CONSTRUTOR MAIS ANTIGO (2 CAMPOS)
-    // continua aceitando só nunota + status
-    // ==============================
     public PedidoConferenciaDto(Long nunota, String statusConferencia) {
-        this(nunota, null, null, statusConferencia,
+        this(nunota, null, null, null, statusConferencia,
                 null, null, null, null, null);
     }
 

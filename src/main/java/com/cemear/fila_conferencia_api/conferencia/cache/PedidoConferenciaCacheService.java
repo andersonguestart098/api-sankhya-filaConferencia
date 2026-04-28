@@ -118,8 +118,93 @@ public class PedidoConferenciaCacheService {
                                 PedidoConferenciaDoc::getNunota,
                                 Comparator.nullsLast(Comparator.reverseOrder())
                         ))
-                .map(PedidoConferenciaDoc::getSnapshot)
+                .map(this::normalizarSnapshot)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+    }
+
+    private PedidoConferenciaDto normalizarSnapshot(PedidoConferenciaDoc doc) {
+        PedidoConferenciaDto dto = doc.getSnapshot();
+
+        if (dto == null) {
+            return null;
+        }
+
+        Long nuconf = dto.getNuconf();
+        String status = normalize(dto.getStatusConferencia());
+
+        if ((nuconf == null || nuconf <= 0) && "AC".equals(status)) {
+            Long nuconfAtual = buscarNuconfAtualPorNunota(dto.getNunota());
+
+            if (nuconfAtual != null && nuconfAtual > 0) {
+                dto.setNuconf(nuconfAtual);
+
+                try {
+                    doc.setSnapshot(dto);
+                    doc.setUpdatedAt(java.time.Instant.now());
+                    pedidoConferenciaMongoService.save(doc);
+
+                    log.info(
+                            "CACHE_AUTO_HEAL_NUCONF nunota={} nuconf={}",
+                            dto.getNunota(),
+                            nuconfAtual
+                    );
+                } catch (Exception e) {
+                    log.warn(
+                            "Falha ao atualizar snapshot com NUCONF. nunota={}, nuconf={}",
+                            dto.getNunota(),
+                            nuconfAtual,
+                            e
+                    );
+                }
+            }
+        }
+
+        return dto;
+    }
+
+    private Long buscarNuconfAtualPorNunota(Long nunota) {
+        if (nunota == null) {
+            return null;
+        }
+
+        String sql = """
+        SELECT NUCONF
+        FROM (
+            SELECT CAB.NUCONFATUAL AS NUCONF
+              FROM TGFCAB CAB
+             WHERE CAB.NUNOTA = %d
+               AND CAB.NUCONFATUAL IS NOT NULL
+
+            UNION ALL
+
+            SELECT CON.NUCONF AS NUCONF
+              FROM TGFCON2 CON
+             WHERE CON.NUNOTAORIG = %d
+               AND CON.NUCONF IS NOT NULL
+        )
+        WHERE NUCONF IS NOT NULL
+        ORDER BY NUCONF DESC
+    """.formatted(nunota, nunota);
+
+        try {
+            JsonNode root = gatewayClient.executeDbExplorer(sql);
+            JsonNode rowsNode = root.path("responseBody").path("rows");
+
+            if (!rowsNode.isArray() || rowsNode.size() == 0) {
+                log.warn("NUCONF_NAO_ENCONTRADO_TGFCAB_NEM_TGFCON2 nunota={}", nunota);
+                return null;
+            }
+
+            Long nuconf = readLong(rowsNode.get(0), 0);
+
+            log.info("NUCONF_ENCONTRADO_FALLBACK nunota={} nuconf={}", nunota, nuconf);
+
+            return nuconf;
+        } catch (Exception e) {
+            log.warn("Falha ao buscar NUCONF atual no Sankhya. nunota={}", nunota, e);
+            return null;
+        }
     }
 
     private Set<Long> buscarNunotasValidasNoSankhya(List<Long> nunotas) {
