@@ -31,6 +31,9 @@ public class PedidoConferenciaDoc {
     private Instant conferenciaFinalizadaAt;
     private Long tempoConferenciaMs;
 
+    private Long nuconf;
+
+
     // snapshot completo da fila
     private PedidoConferenciaDto snapshot;
 }

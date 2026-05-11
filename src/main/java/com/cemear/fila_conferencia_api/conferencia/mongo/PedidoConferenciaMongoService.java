@@ -148,6 +148,78 @@ public class PedidoConferenciaMongoService {
                 .orElse(null);
     }
 
+    public PedidoConferenciaDoc atualizarStatusConferencia(
+            Long nunota,
+            String status,
+            Long nuconf
+    ) {
+        Instant now = Instant.now();
+
+        PedidoConferenciaDoc doc = repo.findByNunota(nunota)
+                .orElseGet(() -> {
+                    PedidoConferenciaDoc novo = new PedidoConferenciaDoc();
+                    novo.setNunota(nunota);
+                    novo.setCreatedAt(now);
+                    novo.setUpdatedAt(now);
+                    return novo;
+                });
+
+        String statusNormalizado = normalizeStatus(status);
+
+        doc.setLastStatusConferencia(statusNormalizado);
+        doc.setLastStatusUpdatedAt(now);
+
+        if (nuconf != null) {
+            doc.setNuconf(nuconf);
+        }
+
+        if ("AC".equals(statusNormalizado)) {
+            if (doc.getConferenciaIniciadaAt() == null) {
+                doc.setConferenciaIniciadaAt(now);
+            }
+        }
+
+        if ("F".equals(statusNormalizado)) {
+
+            if (doc.getConferenciaFinalizadaAt() == null) {
+                doc.setConferenciaFinalizadaAt(now);
+            }
+
+            Instant inicio = doc.getConferenciaIniciadaAt();
+
+            if (inicio != null) {
+                long tempoMs =
+                        doc.getConferenciaFinalizadaAt().toEpochMilli()
+                                - inicio.toEpochMilli();
+
+                doc.setTempoConferenciaMs(
+                        Math.max(tempoMs, 0L)
+                );
+            }
+        }
+
+        PedidoConferenciaDto snapshot = doc.getSnapshot();
+
+        if (snapshot != null) {
+            snapshot.setStatusConferencia(statusNormalizado);
+
+            if (nuconf != null) {
+                snapshot.setNuconf(nuconf);
+            }
+
+            if ("F".equals(statusNormalizado)) {
+                snapshot.setTempoConferenciaMs(doc.getTempoConferenciaMs());
+            }
+
+            doc.setSnapshot(snapshot);
+        }
+
+
+        doc.setUpdatedAt(now);
+
+        return repo.save(doc);
+    }
+
     public PedidoConferenciaDoc upsertLastStatusConferencia(Long nunota, String status) {
         Instant now = Instant.now();
 
@@ -240,6 +312,8 @@ public class PedidoConferenciaMongoService {
 
         return repo.save(doc);
     }
+
+
 
     private String normalizeStatus(String status) {
         if (status == null || status.isBlank()) {

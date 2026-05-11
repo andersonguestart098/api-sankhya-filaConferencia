@@ -127,13 +127,15 @@ public class ConferenciaController {
         }
 
         try {
-            pedidoConferenciaMongoService.marcarInicioConferencia(
-                    req.nunotaOrig()
+            pedidoConferenciaMongoService.atualizarStatusConferencia(
+                    req.nunotaOrig(),
+                    "AC",
+                    nuconf
             );
 
             eventPublisher.pedidoStatusChanged(
                     req.nunotaOrig(),
-                    "A",
+                    "AC",
                     false
             );
 
@@ -212,8 +214,10 @@ public class ConferenciaController {
         );
 
         try {
-            pedidoConferenciaMongoService.marcarFinalizacaoConferencia(
-                    req.nunotaOrig()
+            pedidoConferenciaMongoService.atualizarStatusConferencia(
+                    req.nunotaOrig(),
+                    "F",
+                    req.nuconf()
             );
 
             eventPublisher.pedidoFinalizado(
