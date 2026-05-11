@@ -5,13 +5,11 @@ import com.cemear.fila_conferencia_api.auth.Usuario;
 import com.cemear.fila_conferencia_api.auth.UsuarioRepository;
 import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaDoc;
 import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
-import com.cemear.fila_conferencia_api.conferencia.sse.SseHub;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -25,7 +23,7 @@ public class PedidosPendentesScheduler {
     private final PushService pushService;
     private final UsuarioRepository usuarioRepository;
     private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
-    private final SseHub sseHub;
+    private final PedidoConferenciaEventPublisher eventPublisher;
 
     private Set<Long> ultimoSnapshotAcR = new HashSet<>();
     private volatile List<Usuario> usuariosCache = List.of();
@@ -51,10 +49,14 @@ public class PedidosPendentesScheduler {
 
         try {
             final long tList0 = System.currentTimeMillis();
-            List<PedidoConferenciaDto> pendentes = pedidoConferenciaService.listarPendentes();
+
+            List<PedidoConferenciaDto> pendentes =
+                    pedidoConferenciaService.listarPendentes();
+
             final long tListMs = System.currentTimeMillis() - tList0;
 
-            total = (pendentes == null) ? 0 : pendentes.size();
+            total = pendentes == null ? 0 : pendentes.size();
+
             log.info("[SCHED] listarPendentes={}ms total={}", tListMs, total);
 
             if (pendentes == null || pendentes.isEmpty()) {
@@ -62,51 +64,10 @@ public class PedidosPendentesScheduler {
             }
 
             if (ENABLE_PUSH) {
-                final long tPush0 = System.currentTimeMillis();
-
-                Set<Long> atualAcR = new HashSet<>();
-                for (PedidoConferenciaDto p : pendentes) {
-                    Long nunota = p.getNunota();
-                    String status = normalizeStatus(p.getStatusConferencia());
-                    if (nunota != null && ("AC".equals(status) || "R".equals(status))) {
-                        atualAcR.add(nunota);
-                    }
-                }
-
-                Set<Long> novosSet = new HashSet<>(atualAcR);
-                novosSet.removeAll(ultimoSnapshotAcR);
-                novos = novosSet.size();
-
-                ultimoSnapshotAcR = atualAcR;
-
-                if (!novosSet.isEmpty()) {
-                    List<Usuario> usuarios = getUsuariosComCache();
-
-                    for (Long nunota : novosSet) {
-                        String titulo = "Novo pedido na fila";
-                        String corpo = "Pedido " + nunota + " aguardando conferência";
-
-                        for (Usuario u : usuarios) {
-                            String token = u.getPushToken();
-                            if (token == null || token.isBlank()) continue;
-
-                            try {
-                                pushService.enviarPush(token, titulo, corpo);
-                            } catch (Exception ex) {
-                                log.warn("[SCHED] push failed token={} nunota={} err={}",
-                                        token.substring(0, Math.min(8, token.length())),
-                                        nunota,
-                                        ex.getMessage());
-                            }
-                        }
-                    }
-                }
-
-                final long tPushMs = System.currentTimeMillis() - tPush0;
-                log.info("[SCHED] pushBlock={}ms novos={}", tPushMs, novos);
+                novos = processarPushPedidosNovos(pendentes);
             }
 
-            final List<Long> nunotas = pendentes.stream()
+            List<Long> nunotas = pendentes.stream()
                     .map(PedidoConferenciaDto::getNunota)
                     .filter(Objects::nonNull)
                     .distinct()
@@ -117,75 +78,191 @@ public class PedidosPendentesScheduler {
             }
 
             final long tMongo0 = System.currentTimeMillis();
-            Map<Long, PedidoConferenciaDoc> mongoMapAnterior = pedidoConferenciaMongoService.mapByNunota(nunotas);
+
+            Map<Long, PedidoConferenciaDoc> mongoMapAnterior =
+                    pedidoConferenciaMongoService.mapByNunota(nunotas);
+
             final long tMongoMs = System.currentTimeMillis() - tMongo0;
-            log.info("[SCHED] mongoMapByNunota={}ms nunotas={}", tMongoMs, nunotas.size());
 
-            final long tLoop0 = System.currentTimeMillis();
+            log.info("[SCHED] mongoMapByNunota={}ms nunotas={}",
+                    tMongoMs,
+                    nunotas.size()
+            );
 
-            for (PedidoConferenciaDto p : pendentes) {
-                Long nunota = p.getNunota();
-                if (nunota == null) continue;
+            List<EventoStatusPedido> eventos = new ArrayList<>();
 
-                String statusAtual = normalizeStatus(p.getStatusConferencia());
-                if (statusAtual == null || statusAtual.isBlank()) continue;
+            final long tCompare0 = System.currentTimeMillis();
 
-                PedidoConferenciaDoc docAnterior = mongoMapAnterior.get(nunota);
+            for (PedidoConferenciaDto pedidoAtual : pendentes) {
+                Long nunota = pedidoAtual.getNunota();
+
+                if (nunota == null) {
+                    continue;
+                }
+
+                String statusAtual = normalizeStatus(
+                        pedidoAtual.getStatusConferencia()
+                );
+
+                if (statusAtual == null || statusAtual.isBlank()) {
+                    continue;
+                }
+
+                PedidoConferenciaDoc docAnterior =
+                        mongoMapAnterior.get(nunota);
+
                 String statusAnterior = docAnterior != null
                         ? normalizeStatus(docAnterior.getLastStatusConferencia())
                         : null;
 
                 if (statusAnterior == null) {
-                    Map<String, Object> payload = Map.of(
-                            "nunota", nunota,
-                            "statusConferencia", statusAtual,
-                            "updatedAt", Instant.now().toString(),
-                            "initial", true
-                    );
-
                     initial++;
-                    sseHub.broadcast("pedido_status_changed", payload);
+
+                    eventos.add(new EventoStatusPedido(
+                            nunota,
+                            statusAtual,
+                            true
+                    ));
+
                     continue;
                 }
 
                 if (!statusAtual.equals(statusAnterior)) {
-                    Map<String, Object> payload = Map.of(
-                            "nunota", nunota,
-                            "statusConferencia", statusAtual,
-                            "updatedAt", Instant.now().toString()
-                    );
-
                     changed++;
-                    sseHub.broadcast("pedido_status_changed", payload);
+
+                    eventos.add(new EventoStatusPedido(
+                            nunota,
+                            statusAtual,
+                            false
+                    ));
                 }
             }
 
-            final long tLoopMs = System.currentTimeMillis() - tLoop0;
-            log.info("[SCHED] loopEmit={}ms changed={} initial={}", tLoopMs, changed, initial);
+            final long tCompareMs = System.currentTimeMillis() - tCompare0;
+
+            log.info("[SCHED] compare={}ms changed={} initial={} eventos={}",
+                    tCompareMs,
+                    changed,
+                    initial,
+                    eventos.size()
+            );
 
             final long tSave0 = System.currentTimeMillis();
+
             pedidoConferenciaMongoService.upsertSnapshot(pendentes);
+
             final long tSaveMs = System.currentTimeMillis() - tSave0;
-            log.info("[SCHED] saveSnapshot={}ms total={}", tSaveMs, pendentes.size());
+
+            log.info("[SCHED] saveSnapshot={}ms total={}",
+                    tSaveMs,
+                    pendentes.size()
+            );
+
+            final long tEmit0 = System.currentTimeMillis();
+
+            for (EventoStatusPedido evento : eventos) {
+                eventPublisher.pedidoStatusChanged(
+                        evento.nunota(),
+                        evento.statusConferencia(),
+                        evento.initial()
+                );
+            }
+
+            final long tEmitMs = System.currentTimeMillis() - tEmit0;
+
+            log.info("[SCHED] emitEvents={}ms eventos={}",
+                    tEmitMs,
+                    eventos.size()
+            );
 
         } catch (Exception e) {
             log.error("[SCHED] error: {}", e.getMessage(), e);
         } finally {
             final long totalMs = System.currentTimeMillis() - t0;
+
             log.info("[SCHED] total={}ms totalPendentes={} changed={} initial={} novos={}",
-                    totalMs, total, changed, initial, novos);
+                    totalMs,
+                    total,
+                    changed,
+                    initial,
+                    novos
+            );
+
             running.set(false);
         }
     }
 
+    private int processarPushPedidosNovos(List<PedidoConferenciaDto> pendentes) {
+        final long tPush0 = System.currentTimeMillis();
+
+        Set<Long> atualAcR = new HashSet<>();
+
+        for (PedidoConferenciaDto p : pendentes) {
+            Long nunota = p.getNunota();
+            String status = normalizeStatus(p.getStatusConferencia());
+
+            if (nunota != null && ("AC".equals(status) || "R".equals(status))) {
+                atualAcR.add(nunota);
+            }
+        }
+
+        Set<Long> novosSet = new HashSet<>(atualAcR);
+        novosSet.removeAll(ultimoSnapshotAcR);
+
+        ultimoSnapshotAcR = atualAcR;
+
+        if (!novosSet.isEmpty()) {
+            List<Usuario> usuarios = getUsuariosComCache();
+
+            for (Long nunota : novosSet) {
+                String titulo = "Novo pedido na fila";
+                String corpo = "Pedido " + nunota + " aguardando conferência";
+
+                for (Usuario usuario : usuarios) {
+                    String token = usuario.getPushToken();
+
+                    if (token == null || token.isBlank()) {
+                        continue;
+                    }
+
+                    try {
+                        pushService.enviarPush(token, titulo, corpo);
+                    } catch (Exception ex) {
+                        log.warn(
+                                "[SCHED] push failed token={} nunota={} err={}",
+                                token.substring(0, Math.min(8, token.length())),
+                                nunota,
+                                ex.getMessage()
+                        );
+                    }
+                }
+            }
+        }
+
+        final long tPushMs = System.currentTimeMillis() - tPush0;
+
+        log.info("[SCHED] pushBlock={}ms novos={}",
+                tPushMs,
+                novosSet.size()
+        );
+
+        return novosSet.size();
+    }
+
     private List<Usuario> getUsuariosComCache() {
         long now = System.currentTimeMillis();
-        if ((now - usuariosCacheAtMs) < 60_000 && usuariosCache != null && !usuariosCache.isEmpty()) {
+
+        if ((now - usuariosCacheAtMs) < 60_000
+                && usuariosCache != null
+                && !usuariosCache.isEmpty()) {
             return usuariosCache;
         }
+
         List<Usuario> usuarios = usuarioRepository.findAll();
+
         usuariosCache = usuarios;
         usuariosCacheAtMs = now;
+
         return usuarios;
     }
 
@@ -193,6 +270,13 @@ public class PedidosPendentesScheduler {
         if (status == null || status.isBlank()) {
             return null;
         }
+
         return status.trim().toUpperCase();
     }
+
+    private record EventoStatusPedido(
+            Long nunota,
+            String statusConferencia,
+            boolean initial
+    ) {}
 }

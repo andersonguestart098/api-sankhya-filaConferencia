@@ -6,9 +6,11 @@ import com.cemear.fila_conferencia_api.conferencia.ConferenciaWorkflowService;
 import com.cemear.fila_conferencia_api.conferencia.FinalizarConferenciaRequest;
 import com.cemear.fila_conferencia_api.conferencia.IniciarConferenciaRequest;
 import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaDto;
+import com.cemear.fila_conferencia_api.conferencia.PedidoConferenciaEventPublisher;
 import com.cemear.fila_conferencia_api.conferencia.PreencherItensRequest;
 import com.cemear.fila_conferencia_api.conferencia.cache.PedidoConferenciaCacheService;
 import com.cemear.fila_conferencia_api.conferencia.mongo.ConferenciaItemMongoService;
+import com.cemear.fila_conferencia_api.conferencia.mongo.PedidoConferenciaMongoService;
 import com.cemear.fila_conferencia_api.conferencia.sse.SseHub;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +34,8 @@ public class ConferenciaController {
     private final PedidoConferenciaCacheService pedidoConferenciaCacheService;
     private final ConferenciaWorkflowService conferenciaWorkflowService;
     private final ConferenciaItemMongoService conferenciaItemMongoService;
+    private final PedidoConferenciaMongoService pedidoConferenciaMongoService;
+    private final PedidoConferenciaEventPublisher eventPublisher;
     private final SseHub sseHub;
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -105,16 +109,38 @@ public class ConferenciaController {
         }
 
         Long nuconf = nuconfNode.asLong();
-        log.info("✅ CONFERENCIA_CRIADA - nunotaOrig: {}, nuconf: {}", req.nunotaOrig(), nuconf);
+
+        log.info("✅ CONFERENCIA_CRIADA - nunotaOrig: {}, nuconf: {}",
+                req.nunotaOrig(), nuconf);
 
         try {
             conferenciaWorkflowService.atualizarNuconfCabecalhoNota(
                     req.nunotaOrig(),
                     nuconf
             );
-            log.info("✅ NUCONF_ATUALIZADO_TGFCAB - nunotaOrig: {}, nuconf: {}", req.nunotaOrig(), nuconf);
+
+            log.info("✅ NUCONF_ATUALIZADO_TGFCAB - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), nuconf);
         } catch (Exception e) {
             log.error("❌ ERRO_ATUALIZAR_NUCONF_TGFCAB - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), nuconf, e);
+        }
+
+        try {
+            pedidoConferenciaMongoService.marcarInicioConferencia(
+                    req.nunotaOrig()
+            );
+
+            eventPublisher.pedidoStatusChanged(
+                    req.nunotaOrig(),
+                    "A",
+                    false
+            );
+
+            log.info("📡 EVENTO_CONFERENCIA_INICIADA_ENVIADO - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), nuconf);
+        } catch (Exception e) {
+            log.warn("⚠️ FALHA_ATUALIZAR_MONGO_OU_EVENTO_INICIO - nunotaOrig: {}, nuconf: {}",
                     req.nunotaOrig(), nuconf, e);
         }
 
@@ -123,7 +149,9 @@ public class ConferenciaController {
                     req.nunotaOrig(),
                     nuconf
             );
-            log.info("✅ ITENS_PREENCHIDOS - nunotaOrig: {}, nuconf: {}", req.nunotaOrig(), nuconf);
+
+            log.info("✅ ITENS_PREENCHIDOS - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), nuconf);
         } catch (Exception e) {
             log.warn("⚠️ FALHA_PREENCHER_ITENS - nunota={}, nuconf={}",
                     req.nunotaOrig(), nuconf, e);
@@ -135,6 +163,7 @@ public class ConferenciaController {
         );
 
         log.info("✅ CONFERENCIA_INICIADA - Response: {}", dtoResposta);
+
         return ResponseEntity.ok(dtoResposta);
     }
 
@@ -174,15 +203,34 @@ public class ConferenciaController {
 
     @PostMapping("/finalizar")
     public ResponseEntity<?> finalizar(@RequestBody FinalizarConferenciaRequest req) {
-        log.info("🏁 FINALIZAR_CONFERENCIA - nuconf: {}, codUsuario: {}",
-                req.nuconf(), req.codUsuario());
+        log.info("🏁 FINALIZAR_CONFERENCIA - nuconf: {}, nunotaOrig: {}, codUsuario: {}",
+                req.nuconf(), req.nunotaOrig(), req.codUsuario());
 
         JsonNode resp = conferenciaWorkflowService.finalizarConferenciaOkComItens(
                 req.nuconf(),
                 req.codUsuario()
         );
 
-        log.info("✅ CONFERENCIA_FINALIZADA - nuconf: {}", req.nuconf());
+        try {
+            pedidoConferenciaMongoService.marcarFinalizacaoConferencia(
+                    req.nunotaOrig()
+            );
+
+            eventPublisher.pedidoFinalizado(
+                    req.nunotaOrig(),
+                    req.nuconf()
+            );
+
+            log.info("📡 EVENTO_PEDIDO_FINALIZADO_ENVIADO - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), req.nuconf());
+        } catch (Exception e) {
+            log.warn("⚠️ FALHA_ATUALIZAR_MONGO_OU_EVENTO_FINALIZACAO - nunotaOrig: {}, nuconf: {}",
+                    req.nunotaOrig(), req.nuconf(), e);
+        }
+
+        log.info("✅ CONFERENCIA_FINALIZADA - nuconf: {}, nunotaOrig: {}",
+                req.nuconf(), req.nunotaOrig());
+
         return ResponseEntity.ok(resp);
     }
 
@@ -203,6 +251,7 @@ public class ConferenciaController {
     @GetMapping("/health")
     public ResponseEntity<?> health() {
         log.info("❤️ HEALTH_CHECK");
+
         return ResponseEntity.ok(Map.of(
                 "status", "UP",
                 "service", "Conferencia API",
