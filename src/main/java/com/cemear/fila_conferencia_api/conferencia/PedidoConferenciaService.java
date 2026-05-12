@@ -181,6 +181,23 @@ ORDER BY
     I.SEQUENCIA
 """;
 
+    private static final String SQL_STATUS_RAPIDO = """
+SELECT
+    CAB.NUNOTA,
+    CAB.NUCONFATUAL,
+    SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA) AS STATUS_CONFERENCIA
+FROM TGFCAB CAB
+WHERE CAB.DTNEG >= TRUNC(SYSDATE) - 5
+  AND EXISTS (
+      SELECT 1
+      FROM TGFITE ITE
+      WHERE ITE.NUNOTA = CAB.NUNOTA
+  )
+  AND NVL(TRIM(SANKHYA.SNK_GET_SATUSCONFERENCIA(CAB.NUNOTA)), '#') <> '#'
+ORDER BY CAB.NUNOTA DESC
+""";
+
+
     public List<PedidoConferenciaDto> listarPendentes() {
         return listarPendentesPaginado(0, 50, null, null, null, null);
     }
@@ -373,6 +390,45 @@ ORDER BY
         log.info("Pedidos retornados: {}, linhas recebidas: {}", pedidosMap.size(), rows.size());
 
         return new ArrayList<>(pedidosMap.values());
+    }
+
+    public List<PedidoStatusRapidoDto> listarStatusRapido() {
+
+        JsonNode root = gatewayClient.executeDbExplorer(SQL_STATUS_RAPIDO);
+
+        JsonNode rowsNode = root.path("responseBody").path("rows");
+        JsonNode fieldsMetadata = root.path("responseBody").path("fieldsMetadata");
+
+        if (!rowsNode.isArray()) {
+            throw new IllegalStateException("DbExplorer não retornou array 'rows'.");
+        }
+
+        ArrayNode rows = (ArrayNode) rowsNode;
+
+        List<String> cols = extractColumns(fieldsMetadata);
+
+        int iNunota = indexOf(cols, "NUNOTA");
+        int iNuconf = indexOf(cols, "NUCONFATUAL");
+        int iStatus = indexOf(cols, "STATUS_CONFERENCIA");
+
+        List<PedidoStatusRapidoDto> result = new ArrayList<>();
+
+        for (JsonNode r : rows) {
+
+            Long nunota = readLong(r, iNunota);
+
+            if (nunota == null) {
+                continue;
+            }
+
+            result.add(new PedidoStatusRapidoDto(
+                    nunota,
+                    readLong(r, iNuconf),
+                    readText(r, iStatus)
+            ));
+        }
+
+        return result;
     }
 
     private static List<String> extractColumns(JsonNode fieldsMetadata) {
