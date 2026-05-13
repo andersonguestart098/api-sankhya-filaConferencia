@@ -149,20 +149,23 @@ public class PedidosPendentesScheduler {
 
             final long tSave0 = System.currentTimeMillis();
 
-            List<PedidoConferenciaDto> novosPendentes = pendentes.stream()
-                    .filter(p -> p.getNunota() != null
-                            && !mongoMapAnterior.containsKey(p.getNunota()))
+            List<PedidoConferenciaDto> semSnapshot = pendentes.stream()
+                    .filter(p -> {
+                        if (p.getNunota() == null) return false;
+                        PedidoConferenciaDoc doc = mongoMapAnterior.get(p.getNunota());
+                        return doc == null || doc.getSnapshot() == null;
+                    })
                     .collect(Collectors.toList());
 
-            if (!novosPendentes.isEmpty()) {
-                pedidoConferenciaMongoService.insertNovosSnapshots(novosPendentes);
+            if (!semSnapshot.isEmpty()) {
+                pedidoConferenciaMongoService.upsertSnapshot(semSnapshot);
             }
 
             final long tSaveMs = System.currentTimeMillis() - tSave0;
 
-            log.info("[SCHED] saveSnapshot={}ms novos={} total={}",
+            log.info("[SCHED] saveSnapshot={}ms semSnapshot={} total={}",
                     tSaveMs,
-                    novosPendentes.size(),
+                    semSnapshot.size(),
                     pendentes.size()
             );
 

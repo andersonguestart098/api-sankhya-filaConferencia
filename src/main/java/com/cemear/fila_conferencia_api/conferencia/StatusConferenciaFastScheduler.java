@@ -95,7 +95,9 @@ public class StatusConferenciaFastScheduler {
                         statusAtual
                 );
 
-                if ("AC".equals(statusAtual)) {
+                boolean isNovo = mongo == null;
+
+                if ("AC".equals(statusAtual) || isNovo) {
                     List<PedidoConferenciaDto> pedidoCompleto =
                             pedidoConferenciaService.listarPendentesPaginado(
                                     0,
@@ -107,7 +109,8 @@ public class StatusConferenciaFastScheduler {
                             );
 
                     if (pedidoCompleto != null && !pedidoCompleto.isEmpty()) {
-                        log.info("[FAST_SCHED] snapshot rápido salvo nunota={} itens={}",
+                        log.info("[FAST_SCHED] snapshot {} salvo nunota={} itens={}",
+                                isNovo ? "novo" : "rápido",
                                 nunota,
                                 pedidoCompleto.get(0).getItens() != null ? pedidoCompleto.get(0).getItens().size() : 0
                         );
