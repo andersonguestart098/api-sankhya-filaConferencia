@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -131,6 +132,49 @@ public class PedidoConferenciaMongoService {
 
             doc.setUpdatedAt(now);
             repo.save(doc);
+        }
+    }
+
+    public void insertNovosSnapshots(List<PedidoConferenciaDto> novos) {
+        if (novos == null || novos.isEmpty()) {
+            return;
+        }
+
+        Instant now = Instant.now();
+        List<PedidoConferenciaDoc> docs = new ArrayList<>();
+
+        for (PedidoConferenciaDto pedido : novos) {
+            if (pedido == null || pedido.getNunota() == null) {
+                continue;
+            }
+
+            PedidoConferenciaDoc doc = new PedidoConferenciaDoc();
+            doc.setNunota(pedido.getNunota());
+            doc.setCreatedAt(now);
+            doc.setUpdatedAt(now);
+            doc.setSnapshot(pedido);
+
+            String statusAtual = normalizeStatus(pedido.getStatusConferencia());
+
+            if (statusAtual != null) {
+                doc.setLastStatusConferencia(statusAtual);
+                doc.setLastStatusUpdatedAt(now);
+            }
+
+            if ("AC".equals(statusAtual)) {
+                doc.setConferenciaIniciadaAt(now);
+            }
+
+            if ("F".equals(statusAtual)) {
+                doc.setConferenciaFinalizadaAt(now);
+            }
+
+            docs.add(doc);
+        }
+
+        if (!docs.isEmpty()) {
+            repo.saveAll(docs);
+            log.info("[MONGO] insertNovosSnapshots={}", docs.size());
         }
     }
 
