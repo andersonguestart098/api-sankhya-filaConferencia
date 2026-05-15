@@ -45,6 +45,12 @@ public class PedidoConferenciaMongoService {
         doc.setConferenteNome(conferenteNome);
         doc.setUpdatedAt(Instant.now());
 
+        PedidoConferenciaDto snapshot = doc.getSnapshot();
+        if (snapshot != null) {
+            snapshot.setNomeConferente(conferenteNome);
+            doc.setSnapshot(snapshot);
+        }
+
         repo.save(doc);
     }
 
